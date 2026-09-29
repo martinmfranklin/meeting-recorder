@@ -16,11 +16,13 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-/* Layout: one narrow column, phone first. Recorder console on top, recordings log below. */
+/* Layout: one narrow column, phone first. While recording the page reads as a plain notes page:
+   no timer, meter or red controls; a small status dot and quiet text controls in a bottom dock. */
 :root{
-  --bg:#eef1f4; --panel:#ffffff; --ink:#18212b; --muted:#5b6876; --line:#d5dce3;
-  --accent:#1f5f8b; --accent-ink:#ffffff; --rec:#c8322b; --rec-soft:#fbe7e5;
-  --ok:#2d7a4b; --ok-soft:#e3f2e8; --warn:#9a6700; --warn-soft:#fdf3dc; --meter-bg:#e3e8ed;
+  --bg:#eef1f4; --panel:#ffffff; --ink:#18212b; --muted:#5b6876; --faint:#9aa5b1; --line:#d5dce3;
+  --accent:#1f5f8b; --accent-ink:#ffffff; --danger:#b3362f; --danger-soft:#fbe7e5;
+  --ok:#2d7a4b; --ok-soft:#e3f2e8; --warn:#9a6700; --warn-soft:#fdf3dc;
+  --dot-on:#6f9b80; --dot-pause:#b89a5a; --dot-off:#b3362f;
   --t-action:#1f5f8b; --t-decision:#2d7a4b; --t-question:#7a4bb0; --t-follow:#9a6700;
   --f-body:"IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
   --f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
@@ -28,9 +30,10 @@
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#11161c; --panel:#19212a; --ink:#e6ebf0; --muted:#98a5b3; --line:#2b3642;
-  --accent:#5aa3d6; --accent-ink:#0c1318; --rec:#ef5a50; --rec-soft:#3a1d1b;
-  --ok:#5cc184; --ok-soft:#16301f; --warn:#e3b341; --warn-soft:#352a12; --meter-bg:#232d38;
+  --bg:#11161c; --panel:#19212a; --ink:#e6ebf0; --muted:#98a5b3; --faint:#5d6977; --line:#2b3642;
+  --accent:#5aa3d6; --accent-ink:#0c1318; --danger:#ef6a60; --danger-soft:#3a1d1b;
+  --ok:#5cc184; --ok-soft:#16301f; --warn:#e3b341; --warn-soft:#352a12;
+  --dot-on:#4f7a60; --dot-pause:#8a7440; --dot-off:#c0534a;
   --t-action:#5aa3d6; --t-decision:#5cc184; --t-question:#b08ae0; --t-follow:#e3b341;
   color-scheme:dark;
 }}
@@ -38,7 +41,7 @@
 [hidden]{display:none!important}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-body);
-  padding:env(safe-area-inset-top,0px) 16px calc(env(safe-area-inset-bottom,0px) + 24px);
+  padding:env(safe-area-inset-top,0px) 16px calc(env(safe-area-inset-bottom,0px) + 72px);
   -webkit-text-size-adjust:100%}
 main{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:16px;padding-block:16px}
 h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
@@ -50,50 +53,46 @@ label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--mute
 input[type=text],textarea{font:inherit;font-size:16px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;width:100%}
 textarea{min-height:84px;resize:vertical;font-size:15px}
 input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.console{align-items:center;text-align:center}
-.status{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:999px;background:var(--bg);color:var(--muted)}
-.status i{width:8px;height:8px;border-radius:50%;background:currentColor}
-.status[data-s=recording]{background:var(--rec-soft);color:var(--rec)}
-.status[data-s=recording] i{animation:blink 1.2s steps(2,start) infinite}
-.status[data-s=paused],.status[data-s=interrupted],.status[data-s=checking]{background:var(--warn-soft);color:var(--warn)}
-@keyframes blink{to{visibility:hidden}}
-.clock{font:500 52px/1 var(--f-mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-canvas{width:100%;height:28px;display:block;border-radius:6px;background:var(--meter-bg)}
-.controls{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;width:100%}
 .btn{font:inherit;font-size:15px;font-weight:500;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:10px 14px;cursor:pointer;min-height:44px}
 .btn:disabled{opacity:.4;cursor:default}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.btn.danger{color:var(--rec)}
+.btn.danger{color:var(--danger)}
 .btn.small{font-size:13px;padding:6px 10px;min-height:36px}
 .btn.wide{width:100%}
-.rec{width:84px;height:84px;border-radius:50%;border:4px solid var(--line);background:var(--panel);display:grid;place-items:center;cursor:pointer;padding:0}
-.rec span{width:52px;height:52px;border-radius:50%;background:var(--rec);transition:all .2s}
-.rec[data-mode=stop] span{width:32px;height:32px;border-radius:6px}
-.rec:disabled{opacity:.4}
-.controls .btn{justify-self:center;width:100%;max-width:130px}
+.stack{display:flex;flex-direction:column;gap:10px}
 .hint{font-size:13px;color:var(--muted);margin:0}
-.notice{font-size:13px;border-radius:8px;padding:10px 12px;background:var(--warn-soft);color:var(--warn);text-align:left;width:100%;margin:0}
+.notice{font-size:13px;border-radius:8px;padding:10px 12px;background:var(--warn-soft);color:var(--warn);margin:0}
 
-/* typed marker buttons */
-.types{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;width:100%}
-.types .btn{padding:8px 4px;font-size:13px;display:flex;flex-direction:column;align-items:center;gap:2px;border-top:3px solid var(--tc)}
-.types .btn small{font-size:10px;color:var(--muted);font-weight:400}
+/* markers: neutral buttons, color only on the small chip */
+.types{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.types .btn{padding:8px 4px;font-size:13px;color:var(--muted)}
 [data-type=action]{--tc:var(--t-action)} [data-type=decision]{--tc:var(--t-decision)}
 [data-type=question]{--tc:var(--t-question)} [data-type=followup]{--tc:var(--t-follow)} [data-type=note]{--tc:var(--muted)}
-.markers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;width:100%}
-.markers li{display:grid;grid-template-columns:auto auto 1fr;gap:8px;align-items:center}
-.markers time{font:500 13px var(--f-mono);font-variant-numeric:tabular-nums;color:var(--muted)}
+.markers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.markers li{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}
 .chip{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--tc);border:1px solid var(--tc);border-radius:999px;padding:1px 8px;white-space:nowrap}
 .markers input{padding:6px 10px;font-size:15px;min-width:0}
+.markers-empty{color:var(--faint);font-size:14px;margin:0}
 
 /* setup check */
-.checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;width:100%;text-align:left}
+.checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 .checks li{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start;font-size:14px}
 .checks b{font-weight:600}
 .checks .mark{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;background:var(--ok-soft);color:var(--ok)}
 .checks .warn .mark{background:var(--warn-soft);color:var(--warn)}
-.checks .bad .mark{background:var(--rec-soft);color:var(--rec)}
+.checks .bad .mark{background:var(--danger-soft);color:var(--danger)}
 .checks .detail{display:block;color:var(--muted);font-size:13px}
+
+/* bottom dock while recording */
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--panel);border-top:1px solid var(--line);
+  padding:8px 16px calc(env(safe-area-inset-bottom,0px) + 8px);display:flex;align-items:center;justify-content:center}
+.dock-in{width:100%;max-width:560px;display:flex;align-items:center;gap:4px}
+.dotbtn{background:none;border:0;padding:10px;margin-right:auto;display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--faint);font:12px var(--f-mono);font-variant-numeric:tabular-nums}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--dot-on)}
+.dock[data-s=paused] .dot{background:var(--dot-pause)}
+.dock[data-s=interrupted] .dot{background:var(--dot-off)}
+.link{background:none;border:0;font:inherit;font-size:15px;color:var(--muted);padding:10px 12px;cursor:pointer;min-height:44px}
+.link:disabled{opacity:.4}
 
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .item{padding:14px 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
@@ -109,30 +108,29 @@ footer{font-size:12px;color:var(--muted);text-align:center;display:flex;flex-dir
 details summary{cursor:pointer;font-size:13px;color:var(--muted)}
 details[open] summary{margin-bottom:10px}
 
-/* pocket mode: deliberately always black, for OLED battery and to hide the screen */
-.pocket{position:fixed;inset:0;z-index:50;background:#000;color:#3a3a3a;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
-  padding:env(safe-area-inset-top,0px) 24px env(safe-area-inset-bottom,0px);touch-action:none;user-select:none;-webkit-user-select:none;text-align:center}
-.pocket .dot{width:10px;height:10px;border-radius:50%;background:#5a1411}
-.pocket .t{font:500 28px var(--f-mono);font-variant-numeric:tabular-nums;color:#4a4a4a}
-.pocket .h{font-size:13px;color:#3a3a3a;max-width:240px}
-.pocket .ring{width:64px;height:64px;border-radius:50%;border:2px solid #222;position:relative}
-.pocket .ring i{position:absolute;inset:-2px;border-radius:50%;border:2px solid #666;clip-path:inset(0 100% 0 0)}
+/* dark screen: deliberately pure black with nothing on it */
+.pocket{position:fixed;inset:0;z-index:50;background:#000;display:flex;align-items:center;justify-content:center;
+  touch-action:none;user-select:none;-webkit-user-select:none}
+.pocket .h{font-size:13px;color:#333;transition:opacity 1.5s;text-align:center;padding:0 24px}
+.pocket.faded .h{opacity:0}
+.pocket .ring{position:absolute;width:56px;height:56px;border-radius:50%;border:2px solid #1c1c1c;opacity:0}
+.pocket.holding .ring{opacity:1}
+.pocket .ring i{position:absolute;inset:-2px;border-radius:50%;border:2px solid #444;clip-path:inset(0 100% 0 0)}
 .pocket.holding .ring i{transition:clip-path 1s linear;clip-path:inset(0 0 0 0)}
 
-/* interruption alarm */
-.alarm{position:fixed;inset:0;z-index:60;background:var(--rec);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+/* interruption: silent, calm, but hard to miss when you glance at the phone */
+.alarm{position:fixed;inset:0;z-index:60;background:var(--ink);color:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
   padding:env(safe-area-inset-top,0px) 24px env(safe-area-inset-bottom,0px);text-align:center}
-.alarm h3{font-size:26px;margin:0;line-height:1.2}
-.alarm p{margin:0;font-size:15px;max-width:320px;opacity:.95}
-.alarm .big{font:inherit;font-size:20px;font-weight:600;background:#fff;color:#8f1c16;border:0;border-radius:14px;padding:18px 28px;min-width:240px;cursor:pointer}
-.alarm .lite{font:inherit;font-size:15px;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.7);border-radius:10px;padding:10px 18px;cursor:pointer}
-@media (prefers-reduced-motion:reduce){.status[data-s=recording] i{animation:none}.rec span,.pocket.holding .ring i{transition:none}}
+.alarm p{margin:0;font-size:15px;max-width:300px;opacity:.85}
+.alarm .big{font:inherit;font-size:18px;font-weight:600;background:var(--bg);color:var(--ink);border:0;border-radius:12px;padding:16px 28px;min-width:220px;cursor:pointer}
+.alarm .lite{font:inherit;font-size:14px;background:transparent;color:var(--bg);opacity:.8;border:0;padding:10px 18px;cursor:pointer;text-decoration:underline}
+@media (prefers-reduced-motion:reduce){.pocket .h,.pocket.holding .ring i{transition:none}}
 </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>Meeting Recorder</h1>
+    <h1 id="h1">Meeting Recorder</h1>
     <span class="sub" id="today"></span>
   </header>
 
@@ -143,7 +141,7 @@ details[open] summary{margin-bottom:10px}
     <label for="title">Title
       <input type="text" id="title" autocomplete="off" placeholder="Client, topic">
     </label>
-    <details>
+    <details id="att-box">
       <summary>Attendees (optional, saved with the notes file)</summary>
       <label for="attendees">One per line: Name, Role, Company
         <textarea id="attendees" placeholder="Jane Doe, Plant Manager, Client Co.&#10;John Smith, Engineer, Partner Inc."></textarea>
@@ -151,54 +149,55 @@ details[open] summary{margin-bottom:10px}
     </details>
   </section>
 
-  <section class="panel console" aria-label="Recorder">
-    <span class="status" id="status" data-s="ready"><i></i><b id="status-t">Ready</b></span>
-    <div class="clock" id="clock" aria-live="off">00:00:00</div>
-    <canvas id="meter" width="600" height="28" aria-hidden="true"></canvas>
-    <div class="controls">
-      <button class="btn" id="pause" disabled>Pause</button>
-      <button class="rec" id="rec" aria-label="Start recording" data-mode="rec"><span></span></button>
-      <button class="btn" id="pocket-btn" disabled>Pocket</button>
-    </div>
-
-    <div class="types" id="types" hidden>
-      <button class="btn" data-type="action">Action<small>owner</small></button>
-      <button class="btn" data-type="decision">Decision<small>agreed</small></button>
-      <button class="btn" data-type="question">Question<small>open</small></button>
-      <button class="btn" data-type="followup">Follow-up<small>revisit</small></button>
-    </div>
-    <ul class="markers" id="markers"></ul>
-
-    <div id="idle-tools" class="row" style="width:100%">
+  <section class="panel" id="idle-view" aria-label="Start">
+    <div class="stack">
+      <button class="btn primary wide" id="start">Start recording</button>
       <button class="btn wide" id="check-btn">Check setup (5 seconds)</button>
     </div>
     <ul class="checks" id="checks" hidden></ul>
     <audio id="check-audio" controls hidden></audio>
-
-    <p class="notice" id="interrupt" hidden>Recording was interrupted. Audio up to that point is saved. Tap Resume to continue in a new part.</p>
-    <p class="hint" id="hint">Keep this screen on while recording. Pocket mode blacks out the screen but keeps it awake. On iPhone, locking the screen or switching apps stops the microphone.</p>
+    <p class="hint">Once started, the page shows only your notes and a small dot at the bottom. The phone makes no sounds. Keep the screen on; on iPhone, locking it or switching apps stops the microphone. Use Dark to black out the screen.</p>
   </section>
 
-  <section class="panel" aria-labelledby="list-h">
+  <section class="panel" id="live-view" aria-labelledby="notes-h" hidden>
+    <h2 id="notes-h">Notes</h2>
+    <div class="types" id="types">
+      <button class="btn" data-type="action">Action</button>
+      <button class="btn" data-type="decision">Decision</button>
+      <button class="btn" data-type="question">Question</button>
+      <button class="btn" data-type="followup">Follow-up</button>
+    </div>
+    <ul class="markers" id="markers"></ul>
+    <p class="markers-empty" id="markers-empty">Tap a type to add a note at this point in the meeting.</p>
+    <p class="notice" id="interrupt" hidden>The microphone stopped. Audio up to that point is saved. Tap Resume below to continue in a new part.</p>
+  </section>
+
+  <section class="panel" id="list-panel" aria-labelledby="list-h">
     <h2 id="list-h">Recordings on this phone</h2>
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v1.1</span></footer>
+  <footer><span id="storage"></span><span id="offline">v1.2</span></footer>
 </main>
 
-<div class="pocket" id="pocket" hidden aria-label="Pocket mode. Hold anywhere for one second to exit.">
-  <div class="dot"></div>
-  <div class="t" id="pk-time">00:00:00</div>
-  <div class="ring"><i></i></div>
-  <div class="h">Recording. Hold anywhere for 1 second to exit.</div>
+<div class="dock" id="dock" data-s="recording" hidden>
+  <div class="dock-in">
+    <button class="dotbtn" id="dotbtn" aria-label="Status. Tap to show elapsed time."><span class="dot"></span><span id="peek"></span></button>
+    <button class="link" id="pause">Pause</button>
+    <button class="link" id="pocket-btn">Dark</button>
+    <button class="link" id="stop">End</button>
+  </div>
 </div>
 
-<div class="alarm" id="alarm" hidden role="alertdialog" aria-labelledby="alarm-h">
-  <h3 id="alarm-h">Recording stopped</h3>
-  <p id="alarm-p">The microphone was taken away. Everything up to this point is saved.</p>
-  <button class="big" id="alarm-resume">Resume recording</button>
-  <button class="lite" id="alarm-stop">Stop and save instead</button>
+<div class="pocket" id="pocket" hidden aria-label="Dark screen. Hold anywhere for one second to return.">
+  <div class="ring"><i></i></div>
+  <div class="h">Hold anywhere for 1 second to return</div>
+</div>
+
+<div class="alarm" id="alarm" hidden role="alertdialog" aria-label="Recording stopped">
+  <p id="alarm-p">The phone stopped the microphone. Everything so far is saved.</p>
+  <button class="big" id="alarm-resume">Resume</button>
+  <button class="lite" id="alarm-stop">End and save</button>
 </div>
 
 <script>
@@ -206,18 +205,19 @@ details[open] summary{margin-bottom:10px}
 'use strict';
 const $ = s => document.querySelector(s);
 const els = {
-  title: $('#title'), attendees: $('#attendees'), status: $('#status'), statusT: $('#status-t'),
-  clock: $('#clock'), meter: $('#meter'), rec: $('#rec'), pause: $('#pause'), pocketBtn: $('#pocket-btn'),
-  types: $('#types'), markers: $('#markers'), list: $('#list'), storage: $('#storage'), offline: $('#offline'),
-  support: $('#support'), interrupt: $('#interrupt'), today: $('#today'),
-  idle: $('#idle-tools'), checkBtn: $('#check-btn'), checks: $('#checks'), checkAudio: $('#check-audio'),
-  pocket: $('#pocket'), pkTime: $('#pk-time'), alarm: $('#alarm'), alarmP: $('#alarm-p'),
-  alarmResume: $('#alarm-resume'), alarmStop: $('#alarm-stop')
+  title: $('#title'), attendees: $('#attendees'), attBox: $('#att-box'),
+  start: $('#start'), checkBtn: $('#check-btn'), checks: $('#checks'), checkAudio: $('#check-audio'),
+  idle: $('#idle-view'), live: $('#live-view'), listPanel: $('#list-panel'),
+  types: $('#types'), markers: $('#markers'), markersEmpty: $('#markers-empty'), interrupt: $('#interrupt'),
+  dock: $('#dock'), dotbtn: $('#dotbtn'), peek: $('#peek'), pause: $('#pause'), pocketBtn: $('#pocket-btn'), stop: $('#stop'),
+  list: $('#list'), storage: $('#storage'), offline: $('#offline'), support: $('#support'), today: $('#today'),
+  pocket: $('#pocket'), alarm: $('#alarm'), alarmP: $('#alarm-p'), alarmResume: $('#alarm-resume'), alarmStop: $('#alarm-stop')
 };
 els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 29e6;
+const VERSION = 'v1.2';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -275,9 +275,8 @@ async function freeBytes(){ try { const e = await navigator.storage.estimate(); 
 /* ---------- recorder state ---------- */
 let R = null; // active session
 let wakeLock = null;
-let alertCtx = null; // created on a tap so the alarm can sound later
 
-function setStatus(s, text){ els.status.dataset.s = s; els.statusT.textContent = text; }
+function setState(s){ els.dock.dataset.s = s; }
 function elapsed(){ if (!R) return 0; return R.accMs + (R.running ? performance.now() - R.segStart : 0); }
 
 async function getStream(){
@@ -286,8 +285,13 @@ async function getStream(){
   }});
 }
 
+function showLive(on){
+  els.idle.hidden = on; els.live.hidden = !on; els.dock.hidden = !on; els.listPanel.hidden = on;
+  els.title.disabled = on;
+  if (on) els.attBox.open = false;
+}
+
 async function startMeeting(){
-  primeAlert();
   let stream;
   try { stream = await getStream(); }
   catch (e) { showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings, then try again.' : `Could not open the microphone (${e.name}).`); return; }
@@ -302,10 +306,11 @@ async function startMeeting(){
   els.title.value = meeting.title;
   await saveMeeting(meeting);
   R = { meeting, stream: null, mr: null, accMs: 0, segStart: 0, running: false, writes: Promise.resolve(), stopping: false };
-  els.checks.hidden = true; els.checkAudio.hidden = true;
+  els.checks.hidden = true; els.checkAudio.hidden = true; els.checkAudio.pause();
+  showLive(true);
   await beginPart(stream);
   requestPersist(); keepAwake();
-  renderMarkers(); renderList();
+  renderMarkers();
 }
 
 async function beginPart(stream){
@@ -332,14 +337,9 @@ async function beginPart(stream){
   mr.onerror = () => onInterrupted();
   mr.start(5000); // flush to storage every 5 s so a crash loses at most a few seconds
   R.segStart = performance.now(); R.running = true;
-  startMeter(stream);
-  setStatus('recording', 'Recording');
-  els.rec.dataset.mode = 'stop'; els.rec.setAttribute('aria-label', 'Stop and save');
-  els.pause.disabled = false; els.pause.textContent = 'Pause';
-  els.pocketBtn.disabled = false;
-  els.types.hidden = false; els.idle.hidden = true;
-  els.interrupt.hidden = true;
-  els.title.disabled = true;
+  setState('recording');
+  els.pause.textContent = 'Pause'; els.pocketBtn.disabled = false;
+  els.types.hidden = false; els.interrupt.hidden = true;
 }
 
 function stopRecorder(){
@@ -358,25 +358,22 @@ async function onInterrupted(){
   if (R.running) { R.accMs += performance.now() - R.segStart; R.running = false; }
   await stopRecorder();
   R.stream.getTracks().forEach(t => t.stop());
-  stopMeter();
   await R.writes;
   R.meeting.durationMs = R.accMs; R.meeting.status = 'interrupted';
   await saveMeeting(R.meeting);
-  setStatus('interrupted', 'Interrupted');
+  setState('interrupted');
   els.interrupt.hidden = false;
-  els.pause.textContent = 'Resume'; els.pause.disabled = false;
-  els.types.hidden = true; els.pocketBtn.disabled = true;
+  els.pause.textContent = 'Resume'; els.pocketBtn.disabled = true;
+  els.types.hidden = true;
   exitPocket();
-  if (document.visibilityState === 'visible') raiseAlarm(); else R.pendingAlarm = true;
-  renderList();
+  els.alarm.hidden = false;
 }
 
 async function resumeAfterInterrupt(){
-  primeAlert();
   let stream;
   try { stream = await getStream(); } catch (e) { showError('Could not reopen the microphone. Close other apps using it and tap Resume again.'); return; }
-  hideAlarm();
-  R.interrupted = false; R.pendingAlarm = false; R.meeting.status = 'recording';
+  els.alarm.hidden = true;
+  R.interrupted = false; R.meeting.status = 'recording';
   await beginPart(stream);
   keepAwake();
 }
@@ -386,10 +383,10 @@ function togglePause(){
   if (R.interrupted) return resumeAfterInterrupt();
   if (R.running) {
     R.mr.pause(); R.accMs += performance.now() - R.segStart; R.running = false;
-    R.meeting.status = 'paused'; setStatus('paused', 'Paused'); els.pause.textContent = 'Resume';
+    R.meeting.status = 'paused'; setState('paused'); els.pause.textContent = 'Resume';
   } else {
     R.mr.resume(); R.segStart = performance.now(); R.running = true;
-    R.meeting.status = 'recording'; setStatus('recording', 'Recording'); els.pause.textContent = 'Pause';
+    R.meeting.status = 'recording'; setState('recording'); els.pause.textContent = 'Pause';
   }
   saveMeeting(R.meeting);
 }
@@ -398,24 +395,20 @@ async function finish(){
   if (!R) return;
   R.stopping = true;
   clearTimeout(R.muteTimer);
-  hideAlarm(); exitPocket();
+  els.alarm.hidden = true; exitPocket();
   if (R.running) { R.accMs += performance.now() - R.segStart; R.running = false; }
   await stopRecorder();
   R.stream && R.stream.getTracks().forEach(t => t.stop());
-  stopMeter();
   await R.writes;
   const m = R.meeting;
   m.durationMs = R.accMs; m.status = 'done';
   m.title = els.title.value.trim() || m.title; m.attendees = els.attendees.value.trim();
   await saveMeeting(m);
   R = null; releaseAwake();
-  setStatus('ready', 'Saved');
-  els.rec.dataset.mode = 'rec'; els.rec.setAttribute('aria-label', 'Start recording');
-  els.pause.disabled = true; els.pause.textContent = 'Pause'; els.pocketBtn.disabled = true;
-  els.types.hidden = true; els.idle.hidden = false;
-  els.interrupt.hidden = true; els.title.disabled = false;
-  els.title.value = ''; els.attendees.value = ''; els.clock.textContent = '00:00:00';
-  els.markers.innerHTML = '';
+  showLive(false);
+  els.interrupt.hidden = true;
+  els.title.value = ''; els.attendees.value = '';
+  els.markers.innerHTML = ''; els.peek.textContent = '';
   renderList(); showStorage();
 }
 
@@ -424,66 +417,32 @@ let markerSave;
 function addMarker(type){
   if (!R || R.interrupted) return;
   R.meeting.markers.push({t: elapsed(), type, note: ''});
-  if (navigator.vibrate) navigator.vibrate(30);
   renderMarkers(true); saveMeeting(R.meeting);
 }
 function renderMarkers(focusLast){
   els.markers.innerHTML = '';
   if (!R) return;
+  els.markersEmpty.hidden = R.meeting.markers.length > 0;
   R.meeting.markers.forEach((mk, i) => {
     const type = mk.type || 'note';
     const li = document.createElement('li');
-    const t = document.createElement('time'); t.textContent = hms(mk.t);
     const chip = document.createElement('span'); chip.className = 'chip'; chip.dataset.type = type; chip.textContent = TYPES[type];
     const inp = document.createElement('input'); inp.type = 'text'; inp.id = 'mk' + i; inp.value = mk.note;
-    inp.placeholder = type === 'action' ? 'Who, what, by when' : 'Note (optional)';
-    inp.setAttribute('aria-label', `Note for ${TYPES[type]} at ${hms(mk.t)}`);
+    inp.placeholder = type === 'action' ? 'Who, what, by when' : 'Note';
+    inp.setAttribute('aria-label', `Note for ${TYPES[type]}`);
     inp.addEventListener('input', () => { mk.note = inp.value; clearTimeout(markerSave); markerSave = setTimeout(() => R && saveMeeting(R.meeting), 600); });
-    li.append(t, chip, inp); els.markers.append(li);
+    li.append(chip, inp); els.markers.append(li);
     if (focusLast && i === R.meeting.markers.length - 1) inp.focus({preventScroll: true});
   });
 }
 
-/* ---------- level meter ---------- */
-let meter = null;
-function startMeter(stream, onLevel){
-  stopMeter();
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AC(); const src = ctx.createMediaStreamSource(stream);
-    const an = ctx.createAnalyser(); an.fftSize = 1024; src.connect(an);
-    const buf = new Float32Array(an.fftSize); const c = els.meter.getContext('2d');
-    let peak = 0;
-    const draw = () => {
-      an.getFloatTimeDomainData(buf);
-      let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-      const rms = Math.sqrt(sum / buf.length);
-      const db = 20 * Math.log10(rms + 1e-8);
-      if (onLevel) onLevel(db);
-      const lvl = Math.min(1, Math.max(0, (db + 60) / 60)); // -60..0 dBFS
-      peak = Math.max(lvl, peak - 0.01);
-      const w = els.meter.width, h = els.meter.height, cs = getComputedStyle(document.documentElement);
-      c.clearRect(0, 0, w, h);
-      c.fillStyle = cs.getPropertyValue('--accent');
-      c.fillRect(0, 0, w * lvl, h);
-      c.fillStyle = cs.getPropertyValue('--ink'); c.fillRect(Math.max(0, w * peak - 2), 0, 2, h);
-      if (R) els.clock.textContent = hms(elapsed());
-      meter.raf = requestAnimationFrame(draw);
-    };
-    meter = {ctx, raf: 0}; ctx.resume && ctx.resume(); draw();
-  } catch { meter = null; }
-}
-function stopMeter(){
-  if (!meter) return;
-  cancelAnimationFrame(meter.raf); meter.ctx.close && meter.ctx.close(); meter = null;
-  const c = els.meter.getContext('2d'); c.clearRect(0, 0, els.meter.width, els.meter.height);
-}
-setInterval(() => {
+/* elapsed time stays hidden; tapping the dot shows it for 3 seconds */
+let peekTimer;
+els.dotbtn.addEventListener('click', () => {
   if (!R) return;
-  const t = hms(elapsed());
-  els.clock.textContent = t;
-  if (!els.pocket.hidden) els.pkTime.textContent = t;
-}, 500);
+  els.peek.textContent = hms(elapsed());
+  clearTimeout(peekTimer); peekTimer = setTimeout(() => els.peek.textContent = '', 3000);
+});
 
 /* ---------- keep screen on ---------- */
 async function keepAwake(){ try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {} }
@@ -493,22 +452,22 @@ document.addEventListener('visibilitychange', () => {
   if (!R.interrupted) keepAwake();
   const live = R.stream && R.stream.getAudioTracks().some(t => t.readyState === 'live');
   if (!R.interrupted && !R.stopping && (!live || (R.mr && R.mr.state === 'inactive'))) onInterrupted();
-  else if (R.interrupted && R.pendingAlarm) { R.pendingAlarm = false; raiseAlarm(); }
 });
 window.addEventListener('beforeunload', e => { if (R) { e.preventDefault(); e.returnValue = ''; } });
 async function requestPersist(){ try { navigator.storage && navigator.storage.persist && await navigator.storage.persist(); } catch {} }
 
-/* ---------- pocket mode ---------- */
-let holdTimer = null;
+/* ---------- dark screen ---------- */
+let holdTimer = null, fadeTimer = null;
 function enterPocket(){
   if (!R || R.interrupted) return;
-  els.pkTime.textContent = hms(elapsed());
+  els.pocket.classList.remove('faded');
   els.pocket.hidden = false;
   document.documentElement.style.overflow = 'hidden';
+  clearTimeout(fadeTimer); fadeTimer = setTimeout(() => els.pocket.classList.add('faded'), 2500);
   keepAwake();
 }
 function exitPocket(){
-  clearTimeout(holdTimer); els.pocket.classList.remove('holding');
+  clearTimeout(holdTimer); clearTimeout(fadeTimer); els.pocket.classList.remove('holding');
   els.pocket.hidden = true; document.documentElement.style.overflow = '';
 }
 els.pocket.addEventListener('pointerdown', e => {
@@ -521,59 +480,42 @@ els.pocket.addEventListener('pointerdown', e => {
 }));
 els.pocket.addEventListener('contextmenu', e => e.preventDefault());
 
-/* ---------- interruption alarm ---------- */
-function primeAlert(){
-  try {
-    if (!alertCtx) { const AC = window.AudioContext || window.webkitAudioContext; alertCtx = new AC(); }
-    if (alertCtx.state === 'suspended') alertCtx.resume();
-  } catch {}
-}
-function beep(){
-  try {
-    if (!alertCtx) return;
-    alertCtx.resume && alertCtx.resume();
-    const t0 = alertCtx.currentTime;
-    for (let i = 0; i < 3; i++) {
-      const o = alertCtx.createOscillator(), g = alertCtx.createGain();
-      o.type = 'square'; o.frequency.value = 880;
-      g.gain.setValueAtTime(0.0001, t0 + i * 0.45);
-      g.gain.exponentialRampToValueAtTime(0.25, t0 + i * 0.45 + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.45 + 0.3);
-      o.connect(g).connect(alertCtx.destination);
-      o.start(t0 + i * 0.45); o.stop(t0 + i * 0.45 + 0.32);
-    }
-  } catch {}
-}
-function raiseAlarm(){
-  els.alarmP.textContent = `The microphone stopped at ${hms(R ? R.accMs : 0)}, probably from a call, screen lock, or another app. Everything up to that point is saved.`;
-  els.alarm.hidden = false;
-  document.title = 'Recording stopped · Meeting Recorder';
-  if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
-  beep();
-}
-function hideAlarm(){ els.alarm.hidden = true; document.title = 'Meeting Recorder'; }
 els.alarmResume.addEventListener('click', () => resumeAfterInterrupt());
 els.alarmStop.addEventListener('click', () => finish());
 
-/* ---------- setup check ---------- */
+/* ---------- setup check (silent: playback only if you tap play) ---------- */
+function listen(stream, onLevel){
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC(); const an = ctx.createAnalyser(); an.fftSize = 1024;
+    ctx.createMediaStreamSource(stream).connect(an);
+    const buf = new Float32Array(an.fftSize); let raf = 0;
+    const tick = () => {
+      an.getFloatTimeDomainData(buf);
+      let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      onLevel(20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-8));
+      raf = requestAnimationFrame(tick);
+    };
+    ctx.resume && ctx.resume(); tick();
+    return () => { cancelAnimationFrame(raf); ctx.close && ctx.close(); };
+  } catch { return () => {}; }
+}
 async function runCheck(){
   if (R) return;
-  primeAlert();
   const btn = els.checkBtn; btn.disabled = true;
   els.checks.hidden = true; els.checkAudio.hidden = true;
   let stream;
   try { stream = await getStream(); }
   catch (e) { showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings.' : `Could not open the microphone (${e.name}).`); btn.disabled = false; return; }
-  setStatus('checking', 'Speak normally');
   btn.textContent = 'Listening… say a few words from where you will sit';
   const levels = [];
-  startMeter(stream, db => levels.push(db));
+  const stopListen = listen(stream, db => levels.push(db));
   const mime = pickMime(); const chunks = [];
   let mr; try { mr = new MediaRecorder(stream, mime ? {mimeType: mime} : undefined); } catch { mr = null; }
   if (mr) { mr.ondataavailable = e => e.data.size && chunks.push(e.data); mr.start(); }
   await new Promise(r => setTimeout(r, 5000));
   if (mr) await new Promise(r => { mr.onstop = r; mr.stop(); });
-  stream.getTracks().forEach(t => t.stop()); stopMeter();
+  stream.getTracks().forEach(t => t.stop()); stopListen();
 
   // speech level: use the loud end of the distribution, not a single click
   levels.sort((a, b) => a - b);
@@ -581,7 +523,7 @@ async function runCheck(){
   const max = levels.length ? levels[levels.length - 1] : -120;
   const results = [];
   if (p90 > -35) results.push(['ok', 'Microphone level good', `Speech peaks around ${Math.round(p90)} dBFS.`]);
-  else if (p90 > -50) results.push(['warn', 'Microphone level low', `Speech peaks around ${Math.round(p90)} dBFS. Move the phone toward the middle of the table, screen up, away from laptops and vents.`]);
+  else if (p90 > -50) results.push(['warn', 'Microphone level low', `Speech peaks around ${Math.round(p90)} dBFS. Move the phone toward the middle of the table, screen down or up, away from laptops and vents.`]);
   else if (max > -40) results.push(['warn', 'Heard only a brief sound', 'Run the check again and keep talking for the full 5 seconds.']);
   else results.push(['bad', 'Almost nothing heard', 'Check that nothing covers the bottom of the phone and that no other app is using the microphone.']);
 
@@ -592,12 +534,12 @@ async function runCheck(){
   try {
     if (navigator.getBattery) {
       const b = await navigator.getBattery(); const pct = Math.round(b.level * 100);
-      results.push([b.charging || pct >= 40 ? 'ok' : pct >= 20 ? 'warn' : 'bad', `Battery ${pct}%${b.charging ? ', charging' : ''}`, b.charging || pct >= 40 ? 'Screen-on recording uses roughly 10 to 15% per hour; less in pocket mode.' : 'Plug in if the meeting runs over an hour.']);
+      results.push([b.charging || pct >= 40 ? 'ok' : pct >= 20 ? 'warn' : 'bad', `Battery ${pct}%${b.charging ? ', charging' : ''}`, b.charging || pct >= 40 ? 'Screen-on recording uses roughly 10 to 15% per hour; less with Dark on.' : 'Plug in if the meeting runs over an hour.']);
     } else results.push(['warn', 'Battery not reported by this browser', 'Screen-on recording uses roughly 10 to 15% per hour. Plug in for long meetings.']);
   } catch {}
 
   results.push('wakeLock' in navigator
-    ? ['ok', 'Screen stays awake while recording', 'Pocket mode blacks out the screen without letting it lock.']
+    ? ['ok', 'Screen stays awake while recording', 'Dark blacks out the screen without letting it lock.']
     : ['bad', 'This browser cannot keep the screen awake', 'Set Auto-Lock to Never for this meeting (iPhone: Settings, Display & Brightness, Auto-Lock).']);
 
   const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
@@ -615,10 +557,8 @@ async function runCheck(){
   if (chunks.length) {
     if (els.checkAudio.src) URL.revokeObjectURL(els.checkAudio.src);
     els.checkAudio.src = URL.createObjectURL(new Blob(chunks, {type: (mime || 'audio/webm').split(';')[0]}));
-    els.checkAudio.hidden = false;
-    els.checkAudio.play().catch(() => {});
+    els.checkAudio.hidden = false; // tap play to hear it; nothing plays on its own
   }
-  setStatus('ready', 'Ready');
   btn.textContent = 'Check setup again'; btn.disabled = false;
 }
 
@@ -685,7 +625,7 @@ async function renderList(){
     const sub = document.createElement('div'); sub.className = 'sub';
     const nMk = (m.markers || []).length;
     sub.textContent = new Date(m.createdAt).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
-      + (nMk ? ` · ${nMk} marker${nMk > 1 ? 's' : ''}` : '')
+      + (nMk ? ` · ${nMk} note${nMk > 1 ? 's' : ''}` : '')
       + (m.parts > 1 ? ` · ${m.parts} parts` : '');
     li.append(head, sub);
     if (m.status !== 'done') { const t = document.createElement('div'); t.className = 'tag'; t.textContent = m.status === 'recovered' ? 'Recovered after the app closed mid-recording' : 'Ended by interruption'; li.append(t); }
@@ -722,23 +662,24 @@ async function showStorage(){
 function showError(msg){ els.support.textContent = msg; els.support.hidden = false; }
 function showOffline(){
   const ok = navigator.serviceWorker && navigator.serviceWorker.controller;
-  els.offline.textContent = ok ? 'v1.1 · works offline' : 'v1.1';
+  els.offline.textContent = ok ? `${VERSION} · works offline` : VERSION;
 }
 
 /* ---------- boot ---------- */
 async function boot(){
-  if (!window.isSecureContext) { showError('Open this page over https (or localhost). Browsers only allow the microphone on secure pages.'); els.rec.disabled = true; els.checkBtn.disabled = true; }
-  if (!('MediaRecorder' in window) || !navigator.mediaDevices) { showError('This browser cannot record audio. Use Safari on iPhone (iOS 14.5+) or Chrome on Android.'); els.rec.disabled = true; els.checkBtn.disabled = true; }
+  if (!window.isSecureContext) { showError('Open this page over https (or localhost). Browsers only allow the microphone on secure pages.'); els.start.disabled = true; els.checkBtn.disabled = true; }
+  if (!('MediaRecorder' in window) || !navigator.mediaDevices) { showError('This browser cannot record audio. Use Safari on iPhone (iOS 14.5+) or Chrome on Android.'); els.start.disabled = true; els.checkBtn.disabled = true; }
   if ('serviceWorker' in navigator && window.isSecureContext) {
     navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(showOffline).catch(() => {});
     navigator.serviceWorker.addEventListener('controllerchange', showOffline);
   }
-  try { db = await openDB(); } catch { showError('Local storage is unavailable (private browsing?). Recordings cannot be saved.'); els.rec.disabled = true; return; }
+  try { db = await openDB(); } catch { showError('Local storage is unavailable (private browsing?). Recordings cannot be saved.'); els.start.disabled = true; return; }
   // A meeting left mid-recording means the page was closed or crashed; keep what was saved.
   for (const m of await allMeetings()) if (m.status === 'recording' || m.status === 'paused') { m.status = 'recovered'; await saveMeeting(m); }
   renderList(); showStorage(); showOffline();
 }
-els.rec.addEventListener('click', () => R ? finish() : startMeeting());
+els.start.addEventListener('click', startMeeting);
+els.stop.addEventListener('click', finish);
 els.pause.addEventListener('click', togglePause);
 els.pocketBtn.addEventListener('click', enterPocket);
 els.types.addEventListener('click', e => { const b = e.target.closest('[data-type]'); if (b) addMarker(b.dataset.type); });
