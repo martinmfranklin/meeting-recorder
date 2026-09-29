@@ -8,6 +8,9 @@
 <meta name="apple-mobile-web-app-title" content="Recorder">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#eef1f4">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
 <title>Meeting Recorder</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,7 +20,8 @@
 :root{
   --bg:#eef1f4; --panel:#ffffff; --ink:#18212b; --muted:#5b6876; --line:#d5dce3;
   --accent:#1f5f8b; --accent-ink:#ffffff; --rec:#c8322b; --rec-soft:#fbe7e5;
-  --ok:#2d7a4b; --warn:#9a6700; --warn-soft:#fdf3dc; --meter-bg:#e3e8ed;
+  --ok:#2d7a4b; --ok-soft:#e3f2e8; --warn:#9a6700; --warn-soft:#fdf3dc; --meter-bg:#e3e8ed;
+  --t-action:#1f5f8b; --t-decision:#2d7a4b; --t-question:#7a4bb0; --t-follow:#9a6700;
   --f-body:"IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
   --f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   --r:10px;
@@ -26,10 +30,12 @@
 @media (prefers-color-scheme:dark){:root{
   --bg:#11161c; --panel:#19212a; --ink:#e6ebf0; --muted:#98a5b3; --line:#2b3642;
   --accent:#5aa3d6; --accent-ink:#0c1318; --rec:#ef5a50; --rec-soft:#3a1d1b;
-  --ok:#5cc184; --warn:#e3b341; --warn-soft:#352a12; --meter-bg:#232d38;
+  --ok:#5cc184; --ok-soft:#16301f; --warn:#e3b341; --warn-soft:#352a12; --meter-bg:#232d38;
+  --t-action:#5aa3d6; --t-decision:#5cc184; --t-question:#b08ae0; --t-follow:#e3b341;
   color-scheme:dark;
 }}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-body);
   padding:env(safe-area-inset-top,0px) 16px calc(env(safe-area-inset-bottom,0px) + 24px);
@@ -49,7 +55,7 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .status i{width:8px;height:8px;border-radius:50%;background:currentColor}
 .status[data-s=recording]{background:var(--rec-soft);color:var(--rec)}
 .status[data-s=recording] i{animation:blink 1.2s steps(2,start) infinite}
-.status[data-s=paused],.status[data-s=interrupted]{background:var(--warn-soft);color:var(--warn)}
+.status[data-s=paused],.status[data-s=interrupted],.status[data-s=checking]{background:var(--warn-soft);color:var(--warn)}
 @keyframes blink{to{visibility:hidden}}
 .clock{font:500 52px/1 var(--f-mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
 canvas{width:100%;height:28px;display:block;border-radius:6px;background:var(--meter-bg)}
@@ -59,6 +65,7 @@ canvas{width:100%;height:28px;display:block;border-radius:6px;background:var(--m
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn.danger{color:var(--rec)}
 .btn.small{font-size:13px;padding:6px 10px;min-height:36px}
+.btn.wide{width:100%}
 .rec{width:84px;height:84px;border-radius:50%;border:4px solid var(--line);background:var(--panel);display:grid;place-items:center;cursor:pointer;padding:0}
 .rec span{width:52px;height:52px;border-radius:50%;background:var(--rec);transition:all .2s}
 .rec[data-mode=stop] span{width:32px;height:32px;border-radius:6px}
@@ -66,10 +73,28 @@ canvas{width:100%;height:28px;display:block;border-radius:6px;background:var(--m
 .controls .btn{justify-self:center;width:100%;max-width:130px}
 .hint{font-size:13px;color:var(--muted);margin:0}
 .notice{font-size:13px;border-radius:8px;padding:10px 12px;background:var(--warn-soft);color:var(--warn);text-align:left;width:100%;margin:0}
+
+/* typed marker buttons */
+.types{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;width:100%}
+.types .btn{padding:8px 4px;font-size:13px;display:flex;flex-direction:column;align-items:center;gap:2px;border-top:3px solid var(--tc)}
+.types .btn small{font-size:10px;color:var(--muted);font-weight:400}
+[data-type=action]{--tc:var(--t-action)} [data-type=decision]{--tc:var(--t-decision)}
+[data-type=question]{--tc:var(--t-question)} [data-type=followup]{--tc:var(--t-follow)} [data-type=note]{--tc:var(--muted)}
 .markers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;width:100%}
-.markers li{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center}
-.markers time{font:500 13px var(--f-mono);font-variant-numeric:tabular-nums;color:var(--accent)}
-.markers input{padding:6px 10px;font-size:15px}
+.markers li{display:grid;grid-template-columns:auto auto 1fr;gap:8px;align-items:center}
+.markers time{font:500 13px var(--f-mono);font-variant-numeric:tabular-nums;color:var(--muted)}
+.chip{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--tc);border:1px solid var(--tc);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.markers input{padding:6px 10px;font-size:15px;min-width:0}
+
+/* setup check */
+.checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;width:100%;text-align:left}
+.checks li{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start;font-size:14px}
+.checks b{font-weight:600}
+.checks .mark{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;background:var(--ok-soft);color:var(--ok)}
+.checks .warn .mark{background:var(--warn-soft);color:var(--warn)}
+.checks .bad .mark{background:var(--rec-soft);color:var(--rec)}
+.checks .detail{display:block;color:var(--muted);font-size:13px}
+
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .item{padding:14px 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
 .item:first-child{border-top:0;padding-top:0}
@@ -80,10 +105,28 @@ canvas{width:100%;height:28px;display:block;border-radius:6px;background:var(--m
 .row{display:flex;flex-wrap:wrap;gap:8px}
 audio{width:100%;height:40px}
 .empty{color:var(--muted);font-size:14px;margin:0}
-footer{font-size:12px;color:var(--muted);text-align:center}
+footer{font-size:12px;color:var(--muted);text-align:center;display:flex;flex-direction:column;gap:2px}
 details summary{cursor:pointer;font-size:13px;color:var(--muted)}
 details[open] summary{margin-bottom:10px}
-@media (prefers-reduced-motion:reduce){.status[data-s=recording] i{animation:none}.rec span{transition:none}}
+
+/* pocket mode: deliberately always black, for OLED battery and to hide the screen */
+.pocket{position:fixed;inset:0;z-index:50;background:#000;color:#3a3a3a;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  padding:env(safe-area-inset-top,0px) 24px env(safe-area-inset-bottom,0px);touch-action:none;user-select:none;-webkit-user-select:none;text-align:center}
+.pocket .dot{width:10px;height:10px;border-radius:50%;background:#5a1411}
+.pocket .t{font:500 28px var(--f-mono);font-variant-numeric:tabular-nums;color:#4a4a4a}
+.pocket .h{font-size:13px;color:#3a3a3a;max-width:240px}
+.pocket .ring{width:64px;height:64px;border-radius:50%;border:2px solid #222;position:relative}
+.pocket .ring i{position:absolute;inset:-2px;border-radius:50%;border:2px solid #666;clip-path:inset(0 100% 0 0)}
+.pocket.holding .ring i{transition:clip-path 1s linear;clip-path:inset(0 0 0 0)}
+
+/* interruption alarm */
+.alarm{position:fixed;inset:0;z-index:60;background:var(--rec);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  padding:env(safe-area-inset-top,0px) 24px env(safe-area-inset-bottom,0px);text-align:center}
+.alarm h3{font-size:26px;margin:0;line-height:1.2}
+.alarm p{margin:0;font-size:15px;max-width:320px;opacity:.95}
+.alarm .big{font:inherit;font-size:20px;font-weight:600;background:#fff;color:#8f1c16;border:0;border-radius:14px;padding:18px 28px;min-width:240px;cursor:pointer}
+.alarm .lite{font:inherit;font-size:15px;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.7);border-radius:10px;padding:10px 18px;cursor:pointer}
+@media (prefers-reduced-motion:reduce){.status[data-s=recording] i{animation:none}.rec span,.pocket.holding .ring i{transition:none}}
 </style>
 </head>
 <body>
@@ -115,11 +158,25 @@ details[open] summary{margin-bottom:10px}
     <div class="controls">
       <button class="btn" id="pause" disabled>Pause</button>
       <button class="rec" id="rec" aria-label="Start recording" data-mode="rec"><span></span></button>
-      <button class="btn" id="mark" disabled>Mark</button>
+      <button class="btn" id="pocket-btn" disabled>Pocket</button>
     </div>
-    <p class="notice" id="interrupt" hidden>Recording was interrupted (screen lock, a call, or another app took the mic). Audio up to that point is saved. Tap Resume to continue in a new part.</p>
-    <p class="hint" id="hint">Keep this screen open while recording. On iPhone, locking the screen or switching apps stops the microphone.</p>
+
+    <div class="types" id="types" hidden>
+      <button class="btn" data-type="action">Action<small>owner</small></button>
+      <button class="btn" data-type="decision">Decision<small>agreed</small></button>
+      <button class="btn" data-type="question">Question<small>open</small></button>
+      <button class="btn" data-type="followup">Follow-up<small>revisit</small></button>
+    </div>
     <ul class="markers" id="markers"></ul>
+
+    <div id="idle-tools" class="row" style="width:100%">
+      <button class="btn wide" id="check-btn">Check setup (5 seconds)</button>
+    </div>
+    <ul class="checks" id="checks" hidden></ul>
+    <audio id="check-audio" controls hidden></audio>
+
+    <p class="notice" id="interrupt" hidden>Recording was interrupted. Audio up to that point is saved. Tap Resume to continue in a new part.</p>
+    <p class="hint" id="hint">Keep this screen on while recording. Pocket mode blacks out the screen but keeps it awake. On iPhone, locking the screen or switching apps stops the microphone.</p>
   </section>
 
   <section class="panel" aria-labelledby="list-h">
@@ -127,8 +184,22 @@ details[open] summary{margin-bottom:10px}
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer id="storage"></footer>
+  <footer><span id="storage"></span><span id="offline">v1.1</span></footer>
 </main>
+
+<div class="pocket" id="pocket" hidden aria-label="Pocket mode. Hold anywhere for one second to exit.">
+  <div class="dot"></div>
+  <div class="t" id="pk-time">00:00:00</div>
+  <div class="ring"><i></i></div>
+  <div class="h">Recording. Hold anywhere for 1 second to exit.</div>
+</div>
+
+<div class="alarm" id="alarm" hidden role="alertdialog" aria-labelledby="alarm-h">
+  <h3 id="alarm-h">Recording stopped</h3>
+  <p id="alarm-p">The microphone was taken away. Everything up to this point is saved.</p>
+  <button class="big" id="alarm-resume">Resume recording</button>
+  <button class="lite" id="alarm-stop">Stop and save instead</button>
+</div>
 
 <script>
 (() => {
@@ -136,11 +207,17 @@ details[open] summary{margin-bottom:10px}
 const $ = s => document.querySelector(s);
 const els = {
   title: $('#title'), attendees: $('#attendees'), status: $('#status'), statusT: $('#status-t'),
-  clock: $('#clock'), meter: $('#meter'), rec: $('#rec'), pause: $('#pause'), mark: $('#mark'),
-  markers: $('#markers'), list: $('#list'), storage: $('#storage'), support: $('#support'),
-  interrupt: $('#interrupt'), hint: $('#hint'), today: $('#today')
+  clock: $('#clock'), meter: $('#meter'), rec: $('#rec'), pause: $('#pause'), pocketBtn: $('#pocket-btn'),
+  types: $('#types'), markers: $('#markers'), list: $('#list'), storage: $('#storage'), offline: $('#offline'),
+  support: $('#support'), interrupt: $('#interrupt'), today: $('#today'),
+  idle: $('#idle-tools'), checkBtn: $('#check-btn'), checks: $('#checks'), checkAudio: $('#check-audio'),
+  pocket: $('#pocket'), pkTime: $('#pk-time'), alarm: $('#alarm'), alarmP: $('#alarm-p'),
+  alarmResume: $('#alarm-resume'), alarmStop: $('#alarm-stop')
 };
 els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+
+const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
+const BYTES_PER_HOUR = 29e6;
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -182,7 +259,7 @@ function deleteMeeting(id){
 /* ---------- helpers ---------- */
 const pad = n => String(n).padStart(2, '0');
 function hms(ms){ const s = Math.floor(ms / 1000); return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; }
-function mb(bytes){ return bytes < 1e6 ? `${Math.round(bytes/1e3)} KB` : `${(bytes/1e6).toFixed(1)} MB`; }
+function mb(bytes){ return bytes < 1e6 ? `${Math.round(bytes/1e3)} KB` : bytes < 1e9 ? `${(bytes/1e6).toFixed(1)} MB` : `${(bytes/1e9).toFixed(1)} GB`; }
 function slug(t){ return (t || 'meeting').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'meeting'; }
 function stamp(d){ d = new Date(d); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; }
 function uid(){ return (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)); }
@@ -193,10 +270,12 @@ function pickMime(){
 }
 function extFor(mime){ return /mp4/.test(mime) ? 'm4a' : /ogg/.test(mime) ? 'ogg' : 'webm'; }
 function defaultTitle(){ const d = new Date(); return `Meeting ${d.toLocaleDateString(undefined,{month:'short',day:'numeric'})} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+async function freeBytes(){ try { const e = await navigator.storage.estimate(); return (e.quota || 0) - (e.usage || 0); } catch { return null; } }
 
 /* ---------- recorder state ---------- */
 let R = null; // active session
 let wakeLock = null;
+let alertCtx = null; // created on a tap so the alarm can sound later
 
 function setStatus(s, text){ els.status.dataset.s = s; els.statusT.textContent = text; }
 function elapsed(){ if (!R) return 0; return R.accMs + (R.running ? performance.now() - R.segStart : 0); }
@@ -208,9 +287,12 @@ async function getStream(){
 }
 
 async function startMeeting(){
+  primeAlert();
   let stream;
   try { stream = await getStream(); }
   catch (e) { showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings, then try again.' : `Could not open the microphone (${e.name}).`); return; }
+  const free = await freeBytes();
+  if (free !== null && free < BYTES_PER_HOUR * 1.5) showError(`Low phone storage: about ${Math.max(0, free / BYTES_PER_HOUR).toFixed(1)} hours of recording space left.`);
   const mime = pickMime();
   const meeting = {
     id: uid(), title: els.title.value.trim() || defaultTitle(), attendees: els.attendees.value.trim(),
@@ -220,6 +302,7 @@ async function startMeeting(){
   els.title.value = meeting.title;
   await saveMeeting(meeting);
   R = { meeting, stream: null, mr: null, accMs: 0, segStart: 0, running: false, writes: Promise.resolve(), stopping: false };
+  els.checks.hidden = true; els.checkAudio.hidden = true;
   await beginPart(stream);
   requestPersist(); keepAwake();
   renderMarkers(); renderList();
@@ -240,7 +323,12 @@ async function beginPart(stream){
     m.bytes += blob.size; m.durationMs = elapsed();
     R.writes = R.writes.then(() => addChunk({meetingId: m.id, part, seq: seq++, blob})).then(() => saveMeeting(m)).catch(err => showError('Could not save audio to this phone: ' + err.message));
   };
-  stream.getAudioTracks().forEach(t => t.onended = () => onInterrupted());
+  stream.getAudioTracks().forEach(t => {
+    t.onended = () => onInterrupted();
+    // iOS mutes the track during a phone call or when another app takes the mic
+    t.onmute = () => { if (!R) return; clearTimeout(R.muteTimer); R.muteTimer = setTimeout(() => { if (R && !R.interrupted && t.muted) onInterrupted(); }, 3000); };
+    t.onunmute = () => { if (R) clearTimeout(R.muteTimer); };
+  });
   mr.onerror = () => onInterrupted();
   mr.start(5000); // flush to storage every 5 s so a crash loses at most a few seconds
   R.segStart = performance.now(); R.running = true;
@@ -248,7 +336,9 @@ async function beginPart(stream){
   setStatus('recording', 'Recording');
   els.rec.dataset.mode = 'stop'; els.rec.setAttribute('aria-label', 'Stop and save');
   els.pause.disabled = false; els.pause.textContent = 'Pause';
-  els.mark.disabled = false; els.interrupt.hidden = true;
+  els.pocketBtn.disabled = false;
+  els.types.hidden = false; els.idle.hidden = true;
+  els.interrupt.hidden = true;
   els.title.disabled = true;
 }
 
@@ -264,6 +354,7 @@ function stopRecorder(){
 async function onInterrupted(){
   if (!R || R.stopping || R.interrupted) return;
   R.interrupted = true;
+  clearTimeout(R.muteTimer);
   if (R.running) { R.accMs += performance.now() - R.segStart; R.running = false; }
   await stopRecorder();
   R.stream.getTracks().forEach(t => t.stop());
@@ -274,14 +365,18 @@ async function onInterrupted(){
   setStatus('interrupted', 'Interrupted');
   els.interrupt.hidden = false;
   els.pause.textContent = 'Resume'; els.pause.disabled = false;
-  els.mark.disabled = true;
+  els.types.hidden = true; els.pocketBtn.disabled = true;
+  exitPocket();
+  if (document.visibilityState === 'visible') raiseAlarm(); else R.pendingAlarm = true;
   renderList();
 }
 
 async function resumeAfterInterrupt(){
+  primeAlert();
   let stream;
-  try { stream = await getStream(); } catch (e) { showError('Could not reopen the microphone.'); return; }
-  R.interrupted = false; R.meeting.status = 'recording';
+  try { stream = await getStream(); } catch (e) { showError('Could not reopen the microphone. Close other apps using it and tap Resume again.'); return; }
+  hideAlarm();
+  R.interrupted = false; R.pendingAlarm = false; R.meeting.status = 'recording';
   await beginPart(stream);
   keepAwake();
 }
@@ -302,6 +397,8 @@ function togglePause(){
 async function finish(){
   if (!R) return;
   R.stopping = true;
+  clearTimeout(R.muteTimer);
+  hideAlarm(); exitPocket();
   if (R.running) { R.accMs += performance.now() - R.segStart; R.running = false; }
   await stopRecorder();
   R.stream && R.stream.getTracks().forEach(t => t.stop());
@@ -314,37 +411,42 @@ async function finish(){
   R = null; releaseAwake();
   setStatus('ready', 'Saved');
   els.rec.dataset.mode = 'rec'; els.rec.setAttribute('aria-label', 'Start recording');
-  els.pause.disabled = true; els.pause.textContent = 'Pause'; els.mark.disabled = true;
+  els.pause.disabled = true; els.pause.textContent = 'Pause'; els.pocketBtn.disabled = true;
+  els.types.hidden = true; els.idle.hidden = false;
   els.interrupt.hidden = true; els.title.disabled = false;
   els.title.value = ''; els.attendees.value = ''; els.clock.textContent = '00:00:00';
   els.markers.innerHTML = '';
   renderList(); showStorage();
 }
 
-/* ---------- markers ---------- */
+/* ---------- typed markers ---------- */
 let markerSave;
-function addMarker(){
-  if (!R) return;
-  R.meeting.markers.push({t: elapsed(), note: ''});
+function addMarker(type){
+  if (!R || R.interrupted) return;
+  R.meeting.markers.push({t: elapsed(), type, note: ''});
+  if (navigator.vibrate) navigator.vibrate(30);
   renderMarkers(true); saveMeeting(R.meeting);
 }
 function renderMarkers(focusLast){
   els.markers.innerHTML = '';
   if (!R) return;
   R.meeting.markers.forEach((mk, i) => {
+    const type = mk.type || 'note';
     const li = document.createElement('li');
     const t = document.createElement('time'); t.textContent = hms(mk.t);
+    const chip = document.createElement('span'); chip.className = 'chip'; chip.dataset.type = type; chip.textContent = TYPES[type];
     const inp = document.createElement('input'); inp.type = 'text'; inp.id = 'mk' + i; inp.value = mk.note;
-    inp.placeholder = 'Note (optional)'; inp.setAttribute('aria-label', 'Note for marker at ' + hms(mk.t));
+    inp.placeholder = type === 'action' ? 'Who, what, by when' : 'Note (optional)';
+    inp.setAttribute('aria-label', `Note for ${TYPES[type]} at ${hms(mk.t)}`);
     inp.addEventListener('input', () => { mk.note = inp.value; clearTimeout(markerSave); markerSave = setTimeout(() => R && saveMeeting(R.meeting), 600); });
-    li.append(t, inp); els.markers.append(li);
+    li.append(t, chip, inp); els.markers.append(li);
     if (focusLast && i === R.meeting.markers.length - 1) inp.focus({preventScroll: true});
   });
 }
 
 /* ---------- level meter ---------- */
 let meter = null;
-function startMeter(stream){
+function startMeter(stream, onLevel){
   stopMeter();
   try {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -356,14 +458,16 @@ function startMeter(stream){
       an.getFloatTimeDomainData(buf);
       let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
-      const lvl = Math.min(1, Math.max(0, (20 * Math.log10(rms + 1e-8) + 60) / 60)); // -60..0 dBFS
+      const db = 20 * Math.log10(rms + 1e-8);
+      if (onLevel) onLevel(db);
+      const lvl = Math.min(1, Math.max(0, (db + 60) / 60)); // -60..0 dBFS
       peak = Math.max(lvl, peak - 0.01);
       const w = els.meter.width, h = els.meter.height, cs = getComputedStyle(document.documentElement);
       c.clearRect(0, 0, w, h);
-      c.fillStyle = R && R.running ? cs.getPropertyValue('--accent') : cs.getPropertyValue('--muted');
+      c.fillStyle = cs.getPropertyValue('--accent');
       c.fillRect(0, 0, w * lvl, h);
       c.fillStyle = cs.getPropertyValue('--ink'); c.fillRect(Math.max(0, w * peak - 2), 0, 2, h);
-      els.clock.textContent = hms(elapsed());
+      if (R) els.clock.textContent = hms(elapsed());
       meter.raf = requestAnimationFrame(draw);
     };
     meter = {ctx, raf: 0}; ctx.resume && ctx.resume(); draw();
@@ -374,7 +478,12 @@ function stopMeter(){
   cancelAnimationFrame(meter.raf); meter.ctx.close && meter.ctx.close(); meter = null;
   const c = els.meter.getContext('2d'); c.clearRect(0, 0, els.meter.width, els.meter.height);
 }
-setInterval(() => { if (R) els.clock.textContent = hms(elapsed()); }, 500);
+setInterval(() => {
+  if (!R) return;
+  const t = hms(elapsed());
+  els.clock.textContent = t;
+  if (!els.pocket.hidden) els.pkTime.textContent = t;
+}, 500);
 
 /* ---------- keep screen on ---------- */
 async function keepAwake(){ try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch {} }
@@ -384,11 +493,151 @@ document.addEventListener('visibilitychange', () => {
   if (!R.interrupted) keepAwake();
   const live = R.stream && R.stream.getAudioTracks().some(t => t.readyState === 'live');
   if (!R.interrupted && !R.stopping && (!live || (R.mr && R.mr.state === 'inactive'))) onInterrupted();
+  else if (R.interrupted && R.pendingAlarm) { R.pendingAlarm = false; raiseAlarm(); }
 });
 window.addEventListener('beforeunload', e => { if (R) { e.preventDefault(); e.returnValue = ''; } });
 async function requestPersist(){ try { navigator.storage && navigator.storage.persist && await navigator.storage.persist(); } catch {} }
 
+/* ---------- pocket mode ---------- */
+let holdTimer = null;
+function enterPocket(){
+  if (!R || R.interrupted) return;
+  els.pkTime.textContent = hms(elapsed());
+  els.pocket.hidden = false;
+  document.documentElement.style.overflow = 'hidden';
+  keepAwake();
+}
+function exitPocket(){
+  clearTimeout(holdTimer); els.pocket.classList.remove('holding');
+  els.pocket.hidden = true; document.documentElement.style.overflow = '';
+}
+els.pocket.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  els.pocket.classList.add('holding');
+  holdTimer = setTimeout(exitPocket, 1000);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => els.pocket.addEventListener(ev, () => {
+  clearTimeout(holdTimer); els.pocket.classList.remove('holding');
+}));
+els.pocket.addEventListener('contextmenu', e => e.preventDefault());
+
+/* ---------- interruption alarm ---------- */
+function primeAlert(){
+  try {
+    if (!alertCtx) { const AC = window.AudioContext || window.webkitAudioContext; alertCtx = new AC(); }
+    if (alertCtx.state === 'suspended') alertCtx.resume();
+  } catch {}
+}
+function beep(){
+  try {
+    if (!alertCtx) return;
+    alertCtx.resume && alertCtx.resume();
+    const t0 = alertCtx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const o = alertCtx.createOscillator(), g = alertCtx.createGain();
+      o.type = 'square'; o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, t0 + i * 0.45);
+      g.gain.exponentialRampToValueAtTime(0.25, t0 + i * 0.45 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.45 + 0.3);
+      o.connect(g).connect(alertCtx.destination);
+      o.start(t0 + i * 0.45); o.stop(t0 + i * 0.45 + 0.32);
+    }
+  } catch {}
+}
+function raiseAlarm(){
+  els.alarmP.textContent = `The microphone stopped at ${hms(R ? R.accMs : 0)}, probably from a call, screen lock, or another app. Everything up to that point is saved.`;
+  els.alarm.hidden = false;
+  document.title = 'Recording stopped · Meeting Recorder';
+  if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+  beep();
+}
+function hideAlarm(){ els.alarm.hidden = true; document.title = 'Meeting Recorder'; }
+els.alarmResume.addEventListener('click', () => resumeAfterInterrupt());
+els.alarmStop.addEventListener('click', () => finish());
+
+/* ---------- setup check ---------- */
+async function runCheck(){
+  if (R) return;
+  primeAlert();
+  const btn = els.checkBtn; btn.disabled = true;
+  els.checks.hidden = true; els.checkAudio.hidden = true;
+  let stream;
+  try { stream = await getStream(); }
+  catch (e) { showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings.' : `Could not open the microphone (${e.name}).`); btn.disabled = false; return; }
+  setStatus('checking', 'Speak normally');
+  btn.textContent = 'Listening… say a few words from where you will sit';
+  const levels = [];
+  startMeter(stream, db => levels.push(db));
+  const mime = pickMime(); const chunks = [];
+  let mr; try { mr = new MediaRecorder(stream, mime ? {mimeType: mime} : undefined); } catch { mr = null; }
+  if (mr) { mr.ondataavailable = e => e.data.size && chunks.push(e.data); mr.start(); }
+  await new Promise(r => setTimeout(r, 5000));
+  if (mr) await new Promise(r => { mr.onstop = r; mr.stop(); });
+  stream.getTracks().forEach(t => t.stop()); stopMeter();
+
+  // speech level: use the loud end of the distribution, not a single click
+  levels.sort((a, b) => a - b);
+  const p90 = levels.length ? levels[Math.floor(levels.length * 0.9)] : -120;
+  const max = levels.length ? levels[levels.length - 1] : -120;
+  const results = [];
+  if (p90 > -35) results.push(['ok', 'Microphone level good', `Speech peaks around ${Math.round(p90)} dBFS.`]);
+  else if (p90 > -50) results.push(['warn', 'Microphone level low', `Speech peaks around ${Math.round(p90)} dBFS. Move the phone toward the middle of the table, screen up, away from laptops and vents.`]);
+  else if (max > -40) results.push(['warn', 'Heard only a brief sound', 'Run the check again and keep talking for the full 5 seconds.']);
+  else results.push(['bad', 'Almost nothing heard', 'Check that nothing covers the bottom of the phone and that no other app is using the microphone.']);
+
+  const free = await freeBytes();
+  if (free === null) results.push(['warn', 'Storage not reported', 'Check free space in your phone settings.']);
+  else { const h = free / BYTES_PER_HOUR; results.push([h < 1.5 ? 'bad' : h < 4 ? 'warn' : 'ok', `Storage: about ${h > 99 ? '99+' : h.toFixed(1)} hours free`, `${mb(free)} available to this app.`]); }
+
+  try {
+    if (navigator.getBattery) {
+      const b = await navigator.getBattery(); const pct = Math.round(b.level * 100);
+      results.push([b.charging || pct >= 40 ? 'ok' : pct >= 20 ? 'warn' : 'bad', `Battery ${pct}%${b.charging ? ', charging' : ''}`, b.charging || pct >= 40 ? 'Screen-on recording uses roughly 10 to 15% per hour; less in pocket mode.' : 'Plug in if the meeting runs over an hour.']);
+    } else results.push(['warn', 'Battery not reported by this browser', 'Screen-on recording uses roughly 10 to 15% per hour. Plug in for long meetings.']);
+  } catch {}
+
+  results.push('wakeLock' in navigator
+    ? ['ok', 'Screen stays awake while recording', 'Pocket mode blacks out the screen without letting it lock.']
+    : ['bad', 'This browser cannot keep the screen awake', 'Set Auto-Lock to Never for this meeting (iPhone: Settings, Display & Brightness, Auto-Lock).']);
+
+  const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+  results.push(sw ? ['ok', 'Works offline', 'The app will open with no signal.'] : ['warn', 'Not yet available offline', 'Open the app once more while you have a connection.']);
+
+  els.checks.innerHTML = '';
+  for (const [lvl, head, detail] of results) {
+    const li = document.createElement('li'); li.className = lvl;
+    const m = document.createElement('span'); m.className = 'mark'; m.textContent = lvl === 'ok' ? '✓' : '!';
+    const tx = document.createElement('span'); const b = document.createElement('b'); b.textContent = head;
+    const d = document.createElement('span'); d.className = 'detail'; d.textContent = detail;
+    tx.append(b, d); li.append(m, tx); els.checks.append(li);
+  }
+  els.checks.hidden = false;
+  if (chunks.length) {
+    if (els.checkAudio.src) URL.revokeObjectURL(els.checkAudio.src);
+    els.checkAudio.src = URL.createObjectURL(new Blob(chunks, {type: (mime || 'audio/webm').split(';')[0]}));
+    els.checkAudio.hidden = false;
+    els.checkAudio.play().catch(() => {});
+  }
+  setStatus('ready', 'Ready');
+  btn.textContent = 'Check setup again'; btn.disabled = false;
+}
+
 /* ---------- export ---------- */
+function notesText(m, partsCount){
+  const mk = m.markers || [];
+  const line = k => `${hms(k.t)}  [${TYPES[k.type || 'note']}] ${k.note || '(no note)'}`;
+  const out = [
+    m.title, new Date(m.createdAt).toLocaleString(), `Duration: ${hms(m.durationMs)}`,
+    partsCount > 1 ? `Audio parts: ${partsCount} (recording was interrupted; transcribe in order)` : null,
+    '', 'Attendees:', m.attendees ? m.attendees.split('\n').filter(a => a.trim()).map(a => '- ' + a.trim()).join('\n') : '- (not recorded)',
+    '', 'Markers (in order):', mk.length ? mk.map(line).join('\n') : '(none)'
+  ];
+  for (const [key, label] of [['action', 'Actions'], ['decision', 'Decisions'], ['question', 'Open questions'], ['followup', 'Follow-ups']]) {
+    const list = mk.filter(k => (k.type || 'note') === key);
+    if (list.length) out.push('', `${label}:`, list.map(k => `- ${k.note || '(no note)'} [${hms(k.t)}]`).join('\n'));
+  }
+  return out.filter(l => l !== null).join('\n') + '\n';
+}
 async function buildFiles(m){
   const chunks = (await getChunks(m.id)).sort((a, b) => a.part - b.part || a.seq - b.seq);
   const base = `${stamp(m.createdAt)}_${slug(m.title)}`;
@@ -400,13 +649,7 @@ async function buildFiles(m){
     const name = parts.length > 1 ? `${base}_part${p}.${m.ext}` : `${base}.${m.ext}`;
     files.push(new File([blob], name, {type}));
   }
-  const lines = [
-    m.title, new Date(m.createdAt).toLocaleString(), `Duration: ${hms(m.durationMs)}`,
-    parts.length > 1 ? `Audio parts: ${parts.length} (recording was interrupted; transcribe in order)` : null,
-    '', 'Attendees:', m.attendees ? m.attendees.split('\n').map(a => '- ' + a.trim()).join('\n') : '- (not recorded)',
-    '', 'Markers:', m.markers.length ? m.markers.map(k => `${hms(k.t)}  ${k.note || '(no note)'}`).join('\n') : '(none)'
-  ].filter(l => l !== null);
-  files.push(new File([lines.join('\n') + '\n'], `${base}_notes.txt`, {type: 'text/plain'}));
+  files.push(new File([notesText(m, parts.length)], `${base}_notes.txt`, {type: 'text/plain'}));
   return files;
 }
 async function share(m, btn){
@@ -440,8 +683,9 @@ async function renderList(){
     meta.textContent = `${hms(m.durationMs)} · ${mb(m.bytes)}`;
     head.append(title, meta);
     const sub = document.createElement('div'); sub.className = 'sub';
+    const nMk = (m.markers || []).length;
     sub.textContent = new Date(m.createdAt).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
-      + (m.markers.length ? ` · ${m.markers.length} marker${m.markers.length > 1 ? 's' : ''}` : '')
+      + (nMk ? ` · ${nMk} marker${nMk > 1 ? 's' : ''}` : '')
       + (m.parts > 1 ? ` · ${m.parts} parts` : '');
     li.append(head, sub);
     if (m.status !== 'done') { const t = document.createElement('div'); t.className = 'tag'; t.textContent = m.status === 'recovered' ? 'Recovered after the app closed mid-recording' : 'Ended by interruption'; li.append(t); }
@@ -476,19 +720,29 @@ async function showStorage(){
   } catch { els.storage.textContent = ''; }
 }
 function showError(msg){ els.support.textContent = msg; els.support.hidden = false; }
+function showOffline(){
+  const ok = navigator.serviceWorker && navigator.serviceWorker.controller;
+  els.offline.textContent = ok ? 'v1.1 · works offline' : 'v1.1';
+}
 
 /* ---------- boot ---------- */
 async function boot(){
-  if (!window.isSecureContext) { showError('Open this page over https (or localhost). Browsers only allow the microphone on secure pages.'); els.rec.disabled = true; }
-  if (!('MediaRecorder' in window) || !navigator.mediaDevices) { showError('This browser cannot record audio. Use Safari on iPhone (iOS 14.5+) or Chrome on Android.'); els.rec.disabled = true; }
+  if (!window.isSecureContext) { showError('Open this page over https (or localhost). Browsers only allow the microphone on secure pages.'); els.rec.disabled = true; els.checkBtn.disabled = true; }
+  if (!('MediaRecorder' in window) || !navigator.mediaDevices) { showError('This browser cannot record audio. Use Safari on iPhone (iOS 14.5+) or Chrome on Android.'); els.rec.disabled = true; els.checkBtn.disabled = true; }
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(showOffline).catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', showOffline);
+  }
   try { db = await openDB(); } catch { showError('Local storage is unavailable (private browsing?). Recordings cannot be saved.'); els.rec.disabled = true; return; }
   // A meeting left mid-recording means the page was closed or crashed; keep what was saved.
   for (const m of await allMeetings()) if (m.status === 'recording' || m.status === 'paused') { m.status = 'recovered'; await saveMeeting(m); }
-  renderList(); showStorage();
+  renderList(); showStorage(); showOffline();
 }
 els.rec.addEventListener('click', () => R ? finish() : startMeeting());
 els.pause.addEventListener('click', togglePause);
-els.mark.addEventListener('click', addMarker);
+els.pocketBtn.addEventListener('click', enterPocket);
+els.types.addEventListener('click', e => { const b = e.target.closest('[data-type]'); if (b) addMarker(b.dataset.type); });
+els.checkBtn.addEventListener('click', runCheck);
 boot();
 })();
 </script>
