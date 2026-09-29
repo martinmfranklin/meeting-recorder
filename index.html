@@ -69,14 +69,14 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .notice{font-size:13px;border-radius:8px;padding:10px 12px;background:var(--warn-soft);color:var(--warn);margin:0}
 
 /* markers: neutral buttons, color only on the small chip */
-.types{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-.types .btn{padding:8px 4px;font-size:13px;color:var(--muted)}
-[data-type=action]{--tc:var(--t-action)} [data-type=decision]{--tc:var(--t-decision)}
-[data-type=question]{--tc:var(--t-question)} [data-type=followup]{--tc:var(--t-follow)} [data-type=note]{--tc:var(--muted)}
+.compose{display:grid;grid-template-columns:1fr auto;gap:8px}
+.compose textarea{min-height:44px;height:44px;resize:none;font-size:16px;padding:10px 12px}
 .markers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
-.markers li{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}
-.chip{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--tc);border:1px solid var(--tc);border-radius:999px;padding:1px 8px;white-space:nowrap}
-.markers input{padding:6px 10px;font-size:15px;min-width:0}
+.markers li{display:grid;grid-template-columns:14px 1fr;gap:6px;align-items:start}
+.markers li::before{content:'•';color:var(--muted);font-size:18px;line-height:36px;text-align:center}
+.markers textarea{min-height:36px;height:auto;resize:vertical;font-size:15px;padding:6px 8px;background:var(--panel);border-color:transparent}
+.markers textarea:focus{border-color:var(--line)}
+.part-note{font-size:12px;color:var(--faint);margin:0}
 .markers-empty{color:var(--faint);font-size:14px;margin:0}
 
 /* setup check */
@@ -173,14 +173,13 @@ details[open] summary{margin-bottom:10px}
 
   <section class="panel" id="live-view" aria-labelledby="notes-h" hidden>
     <h2 id="notes-h">Notes</h2>
-    <div class="types" id="types">
-      <button class="btn" data-type="action">Action</button>
-      <button class="btn" data-type="decision">Decision</button>
-      <button class="btn" data-type="question">Question</button>
-      <button class="btn" data-type="followup">Follow-up</button>
-    </div>
+    <p class="part-note" id="part-note" hidden></p>
     <ul class="markers" id="markers"></ul>
-    <p class="markers-empty" id="markers-empty">Tap a type to add a note at this point in the meeting.</p>
+    <div class="compose" id="types">
+      <textarea id="note-in" rows="1" placeholder="Add a bullet" aria-label="New note"></textarea>
+      <button class="btn" id="note-add">Add</button>
+    </div>
+    <p class="markers-empty" id="markers-empty">Each bullet is stamped with the point in the recording where you add it, so it lines up with the transcript.</p>
     <p class="notice" id="interrupt" hidden>The microphone stopped. Audio up to that point is saved. Tap Resume below to continue in a new part.</p>
   </section>
 
@@ -189,7 +188,7 @@ details[open] summary{margin-bottom:10px}
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v1.4</span></footer>
+  <footer><span id="storage"></span><span id="offline">v1.5</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -220,7 +219,7 @@ const els = {
   title: $('#title'), attendees: $('#attendees'), attBox: $('#att-box'),
   start: $('#start'), sourceSeg: $('#source-seg'), callHint: $('#call-hint'), checkBtn: $('#check-btn'), checks: $('#checks'), checkAudio: $('#check-audio'),
   idle: $('#idle-view'), live: $('#live-view'), listPanel: $('#list-panel'),
-  types: $('#types'), markers: $('#markers'), markersEmpty: $('#markers-empty'), interrupt: $('#interrupt'),
+  types: $('#types'), noteIn: $('#note-in'), noteAdd: $('#note-add'), partNote: $('#part-note'), markers: $('#markers'), markersEmpty: $('#markers-empty'), interrupt: $('#interrupt'),
   dock: $('#dock'), dotbtn: $('#dotbtn'), peek: $('#peek'), pause: $('#pause'), pocketBtn: $('#pocket-btn'), stop: $('#stop'),
   list: $('#list'), storage: $('#storage'), offline: $('#offline'), support: $('#support'), today: $('#today'),
   pocket: $('#pocket'), alarm: $('#alarm'), alarmP: $('#alarm-p'), alarmResume: $('#alarm-resume'), alarmStop: $('#alarm-stop')
@@ -229,7 +228,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.4';
+const VERSION = 'v1.5';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -373,7 +372,7 @@ function showLive(on){
   if (on) els.attBox.open = false;
 }
 
-async function startMeeting(){
+async function startMeeting(existing){
   const ctx = newContext();
   let acq;
   try { acq = await acquire(source); }
@@ -381,14 +380,19 @@ async function startMeeting(){
   els.support.hidden = true;
   const free = await freeBytes();
   if (free !== null && free < BYTES_PER_HOUR * 1.5) showError(`Low phone storage: about ${Math.max(0, free / BYTES_PER_HOUR).toFixed(1)} hours of recording space left.`);
-  const meeting = {
+  const meeting = existing || {
     id: uid(), title: els.title.value.trim() || defaultTitle(), attendees: els.attendees.value.trim(),
     createdAt: Date.now(), durationMs: 0, format: 'pcm16', mime: 'audio/wav', ext: 'wav', parts: 0, bytes: 0,
-    status: 'recording', markers: [], source
+    status: 'recording', markers: [], source, segments: []
   };
+  if (existing) { meeting.status = 'recording'; meeting.segments = meeting.segments || []; els.attendees.value = meeting.attendees || ''; }
   els.title.value = meeting.title;
   await saveMeeting(meeting);
-  R = { meeting, stream: null, cap: null, samples: 0, running: false, buf: [], bufSamples: 0, seq: 0, writes: Promise.resolve(), stopping: false };
+  // continuing: audio time picks up where the saved audio ends
+  const continuing = !!existing;
+  const startSamples = existing ? Math.round((meeting.durationMs || 0) / 1000 * RATE) : 0;
+  R = { meeting, stream: null, cap: null, samples: startSamples, running: false, buf: [], bufSamples: 0, seq: 0, writes: Promise.resolve(), stopping: false };
+  if (continuing) R.nextReason = 'continued';
   els.checks.hidden = true; els.checkAudio.hidden = true; els.checkAudio.pause();
   showLive(true);
   try { await beginPart(acq, ctx); }
@@ -410,6 +414,11 @@ async function beginPart(acq, ctx){
   const stream = acq.all;
   R.stream = stream;
   R.meeting.parts += 1; R.seq = 0;
+  (R.meeting.segments = R.meeting.segments || []).push({part: R.meeting.parts, startMs: elapsed(), at: Date.now(), source, reason: R.nextReason || ''});
+  R.nextReason = '';
+  if (source === 'call') R.meeting.source = 'call';
+  els.partNote.hidden = R.meeting.parts < 2;
+  els.partNote.textContent = `Part ${R.meeting.parts} of this meeting. Earlier audio is kept.`;
   R.cap = await openCapture(ctx, acq.inputs, ({pcm}) => {
     if (!R || !R.running || !pcm.length) return;
     R.buf.push(pcm); R.bufSamples += pcm.length; R.samples += pcm.length;
@@ -468,7 +477,7 @@ async function resumeAfterInterrupt(){
   let acq;
   try { acq = await acquire(R.meeting.source || 'mic'); } catch (e) { try { ctx.close(); } catch {} showError(captureError(e) + ' Then tap Resume again.'); return; }
   els.alarm.hidden = true;
-  R.interrupted = false; R.meeting.status = 'recording';
+  R.interrupted = false; R.meeting.status = 'recording'; R.nextReason = 'after interruption';
   try { await beginPart(acq, ctx); } catch (e) { showError('Could not restart audio capture: ' + e.message); return; }
   keepAwake();
 }
@@ -489,6 +498,7 @@ function togglePause(){
 
 async function finish(){
   if (!R) return;
+  if (els.noteIn.value.trim()) addNote();
   R.stopping = true;
   clearTimeout(R.muteTimer); clearTimeout(R.ctxTimer);
   els.alarm.hidden = true; exitPocket();
@@ -504,33 +514,36 @@ async function finish(){
   showLive(false);
   els.interrupt.hidden = true;
   els.title.value = ''; els.attendees.value = '';
-  els.markers.innerHTML = ''; els.peek.textContent = '';
+  els.markers.innerHTML = ''; els.peek.textContent = ''; els.noteIn.value = ''; els.partNote.hidden = true;
   renderList(); showStorage();
 }
 
-/* ---------- typed markers ---------- */
+/* ---------- notes (freeform, time-stamped to the audio) ---------- */
 let markerSave;
-function addMarker(type){
-  if (!R || R.interrupted) return;
-  R.meeting.markers.push({t: elapsed(), type, note: ''});
-  renderMarkers(true); saveMeeting(R.meeting);
+function addNote(){
+  if (!R) return;
+  const text = els.noteIn.value.trim();
+  if (!text) return;
+  R.meeting.markers.push({t: elapsed(), type: 'note', note: text});
+  els.noteIn.value = '';
+  renderMarkers(); saveMeeting(R.meeting);
+  els.noteIn.focus({preventScroll: true});
+  els.noteIn.scrollIntoView({block: 'nearest'});
 }
-function renderMarkers(focusLast){
+function renderMarkers(){
   els.markers.innerHTML = '';
   if (!R) return;
   els.markersEmpty.hidden = R.meeting.markers.length > 0;
   R.meeting.markers.forEach((mk, i) => {
-    const type = mk.type || 'note';
     const li = document.createElement('li');
-    const chip = document.createElement('span'); chip.className = 'chip'; chip.dataset.type = type; chip.textContent = TYPES[type];
-    const inp = document.createElement('input'); inp.type = 'text'; inp.id = 'mk' + i; inp.value = mk.note;
-    inp.placeholder = type === 'action' ? 'Who, what, by when' : 'Note';
-    inp.setAttribute('aria-label', `Note for ${TYPES[type]}`);
+    const inp = document.createElement('textarea'); inp.id = 'mk' + i; inp.rows = 1; inp.value = mk.note;
+    inp.setAttribute('aria-label', 'Note');
     inp.addEventListener('input', () => { mk.note = inp.value; clearTimeout(markerSave); markerSave = setTimeout(() => R && saveMeeting(R.meeting), 600); });
-    li.append(chip, inp); els.markers.append(li);
-    if (focusLast && i === R.meeting.markers.length - 1) inp.focus({preventScroll: true});
+    li.append(inp); els.markers.append(li);
   });
 }
+els.noteAdd.addEventListener('click', addNote);
+els.noteIn.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addNote(); } });
 
 /* elapsed time stays hidden; tapping the dot shows it for 3 seconds */
 let peekTimer;
@@ -663,18 +676,22 @@ async function runCheck(){
 /* ---------- export ---------- */
 function notesText(m, partsCount){
   const mk = m.markers || [];
-  const line = k => `${hms(k.t)}  [${TYPES[k.type || 'note']}] ${k.note || '(no note)'}`;
+  const merged = m.format === 'pcm16';
+  const segs = (m.segments || []).filter(g => g.part > 1);
+  const when = t => new Date(t).toLocaleString(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
   const out = [
     m.title, new Date(m.createdAt).toLocaleString(), `Duration: ${hms(m.durationMs)}`,
     m.source === 'call' ? 'Source: call audio + microphone' : 'Source: microphone (in the room)',
-    partsCount > 1 ? `Audio parts: ${partsCount} (recording was interrupted; transcribe in order)` : null,
-    '', 'Attendees:', m.attendees ? m.attendees.split('\n').filter(a => a.trim()).map(a => '- ' + a.trim()).join('\n') : '- (not recorded)',
-    '', 'Markers (in order):', mk.length ? mk.map(line).join('\n') : '(none)'
+    !merged && partsCount > 1 ? `Audio parts: ${partsCount} (transcribe in order)` : null,
+    '', 'Attendees:', m.attendees ? m.attendees.split('\n').filter(a => a.trim()).map(a => '- ' + a.trim()).join('\n') : '- (not recorded)'
   ];
-  for (const [key, label] of [['action', 'Actions'], ['decision', 'Decisions'], ['question', 'Open questions'], ['followup', 'Follow-ups']]) {
-    const list = mk.filter(k => (k.type || 'note') === key);
-    if (list.length) out.push('', `${label}:`, list.map(k => `- ${k.note || '(no note)'} [${hms(k.t)}]`).join('\n'));
+  if (merged && segs.length) {
+    out.push('', 'Recording breaks (the audio file joins these parts back to back):');
+    out.push(`- Part 1 starts at 00:00:00 (${when(m.createdAt)})`);
+    segs.forEach(g => out.push(`- Part ${g.part} starts at ${hms(g.startMs)} (${when(g.at)}${g.reason ? ', ' + g.reason : ''})`));
   }
+  const label = k => (k.type && k.type !== 'note') ? `[${TYPES[k.type]}] ` : '';
+  out.push('', 'Notes (time in the audio):', mk.length ? mk.map(k => `- [${hms(k.t)}] ${label(k)}${k.note || '(empty)'}`).join('\n') : '- (none)');
   return out.filter(l => l !== null).join('\n') + '\n';
 }
 async function buildFiles(m){
@@ -683,6 +700,13 @@ async function buildFiles(m){
   const type = (m.mime || 'audio/webm').split(';')[0];
   const files = [];
   const parts = [...new Set(chunks.map(c => c.part))];
+  if (m.format === 'pcm16') {
+    const pieces = chunks.map(c => c.blob);
+    pieces.unshift(wavHeader(pieces.reduce((n, b) => n + b.size, 0)));
+    files.push(new File([new Blob(pieces, {type})], `${base}.${m.ext}`, {type}));
+    files.push(new File([notesText(m, parts.length)], `${base}_notes.txt`, {type: 'text/plain'}));
+    return files;
+  }
   for (const p of parts) {
     const pieces = chunks.filter(c => c.part === p).map(c => c.blob);
     if (m.format === 'pcm16') pieces.unshift(wavHeader(pieces.reduce((n, b) => n + b.size, 0)));
@@ -727,11 +751,13 @@ async function renderList(){
     const nMk = (m.markers || []).length;
     sub.textContent = new Date(m.createdAt).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
       + (nMk ? ` · ${nMk} note${nMk > 1 ? 's' : ''}` : '')
-      + (m.parts > 1 ? ` · ${m.parts} parts` : '');
+      + (m.parts > 1 ? ` · recorded in ${m.parts} parts` : '');
     li.append(head, sub);
     if (m.status !== 'done') { const t = document.createElement('div'); t.className = 'tag'; t.textContent = m.status === 'recovered' ? 'Recovered after the app closed mid-recording' : 'Ended by interruption'; li.append(t); }
     const row = document.createElement('div'); row.className = 'row';
     const bPlay = mkBtn('Play'), bShare = mkBtn('Share', 'primary'), bSave = mkBtn('Save file'), bDel = mkBtn('Delete', 'danger');
+    const bCont = m.format === 'pcm16' ? mkBtn('Continue') : null;
+    if (bCont) bCont.onclick = () => { if (!R) startMeeting(m); };
     const player = document.createElement('div'); player.className = 'row';
     bPlay.onclick = async () => {
       if (player.childElementCount) { player.querySelectorAll('audio').forEach(a => { a.pause(); URL.revokeObjectURL(a.src); }); player.innerHTML = ''; bPlay.textContent = 'Play'; return; }
@@ -747,7 +773,7 @@ async function renderList(){
       if (!armed) { armed = setTimeout(() => { armed = 0; bDel.textContent = 'Delete'; }, 3000); bDel.textContent = 'Tap again to delete'; return; }
       clearTimeout(armed); await deleteMeeting(m.id); renderList(); showStorage();
     };
-    row.append(bPlay, bShare, bSave, bDel);
+    row.append(bPlay, bShare, bSave); if (bCont) row.append(bCont); row.append(bDel);
     li.append(row, player);
     els.list.append(li);
   }
@@ -779,7 +805,7 @@ async function boot(){
   for (const m of await allMeetings()) if (m.status === 'recording' || m.status === 'paused') { m.status = 'recovered'; await saveMeeting(m); }
   renderList(); showStorage(); showOffline();
 }
-els.start.addEventListener('click', startMeeting);
+els.start.addEventListener('click', () => startMeeting());
 if (canCall) {
   els.sourceSeg.hidden = false;
   $('#hint-phone').hidden = true; $('#hint-desk').hidden = false;
@@ -790,7 +816,6 @@ if (canCall) {
 els.stop.addEventListener('click', finish);
 els.pause.addEventListener('click', togglePause);
 els.pocketBtn.addEventListener('click', enterPocket);
-els.types.addEventListener('click', e => { const b = e.target.closest('[data-type]'); if (b) addMarker(b.dataset.type); });
 els.checkBtn.addEventListener('click', runCheck);
 boot();
 })();
