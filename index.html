@@ -23,6 +23,7 @@
   --accent:#1f5f8b; --accent-ink:#ffffff; --danger:#b3362f; --danger-soft:#fbe7e5;
   --ok:#2d7a4b; --ok-soft:#e3f2e8; --warn:#9a6700; --warn-soft:#fdf3dc;
   --dot-on:#6f9b80; --dot-pause:#b89a5a; --dot-off:#b3362f;
+  --new-bg:#dfeaf4; --new-line:#b7cde0; --new-ink:#1f5f8b;
   --t-action:#1f5f8b; --t-decision:#2d7a4b; --t-question:#7a4bb0; --t-follow:#9a6700;
   --f-body:"IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
   --f-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
@@ -34,6 +35,7 @@
   --accent:#5aa3d6; --accent-ink:#0c1318; --danger:#ef6a60; --danger-soft:#3a1d1b;
   --ok:#5cc184; --ok-soft:#16301f; --warn:#e3b341; --warn-soft:#352a12;
   --dot-on:#4f7a60; --dot-pause:#8a7440; --dot-off:#c0534a;
+  --new-bg:#15283a; --new-line:#27465f; --new-ink:#7ab8e3;
   --t-action:#5aa3d6; --t-decision:#5cc184; --t-question:#b08ae0; --t-follow:#e3b341;
   color-scheme:dark;
 }}
@@ -113,8 +115,17 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .link:disabled{opacity:.4}
 
 .list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
-.item{padding:14px 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
-.item:first-child{border-top:0;padding-top:0}
+.new-card{background:var(--new-bg);border-color:var(--new-line)}
+.new-card h2{color:var(--new-ink)}
+.new-card input[type=text],.new-card textarea{background:var(--panel)}
+.new-card .seg{background:var(--panel)}
+body.live .new-card{background:var(--panel);border-color:var(--line)}
+body.live .new-card h2{color:var(--muted)}
+.saved-list{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.saved-list h2{padding-inline:4px}
+.list{gap:10px}
+.item{padding:14px 16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;gap:8px}
+.list .empty{padding:14px 16px;border:1px dashed var(--line);border-radius:var(--r)}
 .item-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
 .item-title{font-weight:600;min-width:0;overflow-wrap:anywhere}
 .meta{font:12px var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -164,8 +175,8 @@ details[open] summary{margin-bottom:10px}
 
   <p class="notice" id="support" hidden></p>
 
-  <section class="panel" aria-labelledby="meet-h">
-    <h2 id="meet-h">Meeting</h2>
+  <section class="panel new-card" aria-labelledby="meet-h">
+    <h2 id="meet-h">New meeting</h2>
     <label for="title"><span class="lbl">Title</span>
       <input type="text" id="title" autocomplete="off" placeholder="Client, topic">
     </label>
@@ -206,12 +217,12 @@ details[open] summary{margin-bottom:10px}
     <p class="notice" id="interrupt" hidden>The microphone stopped. Audio up to that point is saved. Tap Resume below to continue in a new part.</p>
   </section>
 
-  <section class="panel" id="list-panel" aria-labelledby="list-h">
+  <section class="saved-list" id="list-panel" aria-labelledby="list-h">
     <h2 id="list-h">Saved recordings</h2>
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v1.9</span></footer>
+  <footer><span id="storage"></span><span id="offline">v1.10</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -251,7 +262,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.9.2';
+const VERSION = 'v1.10';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -446,6 +457,7 @@ function captureError(e){
 
 function showLive(on){
   document.body.classList.toggle('live', on);
+  $('#meet-h').textContent = on ? 'Meeting' : 'New meeting';
   els.idle.hidden = on; els.live.hidden = !on; els.dock.hidden = !on; els.listPanel.hidden = on;
   els.title.disabled = on;
   if (on) els.attBox.open = false;
