@@ -12,6 +12,10 @@ Phone-friendly web app for recording in-person meetings for later transcription.
 - Works offline after the first visit (service worker).
 - Share exports the audio (.wav) plus a `_notes.txt` with attendees, markers in order, and Actions / Decisions / Open questions / Follow-ups grouped, ready for Buzz or another Whisper-based transcriber.
 
+## Call mode (Windows laptop)
+
+Choose **Call** before starting to record Teams, Zoom or Google Meet. In the share window pick **Entire screen** and switch on **Share system audio**; the call audio is mixed with your microphone into one WAV. Use Chrome or Edge, and a headset so the other side is not picked up twice. Clicking Stop sharing in the browser bar stops the recording; Resume asks to share again and continues in a new part.
+
 ## Use
 
 Open the GitHub Pages URL on your phone in Safari or Chrome, then Add to Home Screen. Keep the screen on while recording; on iPhone, locking the screen stops the microphone.

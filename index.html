@@ -60,6 +60,11 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .btn.small{font-size:13px;padding:6px 10px;min-height:36px}
 .btn.wide{width:100%}
 .stack{display:flex;flex-direction:column;gap:10px}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg-b{font:inherit;font-size:15px;font-weight:500;background:var(--panel);color:var(--muted);border:0;padding:10px 8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px}
+.seg-b+.seg-b{border-left:1px solid var(--line)}
+.seg-b small{font-size:11px;font-weight:400;color:var(--faint)}
+.seg-b[aria-checked=true]{background:var(--bg);color:var(--ink);box-shadow:inset 0 -2px 0 var(--accent)}
 .hint{font-size:13px;color:var(--muted);margin:0}
 .notice{font-size:13px;border-radius:8px;padding:10px 12px;background:var(--warn-soft);color:var(--warn);margin:0}
 
@@ -151,13 +156,19 @@ details[open] summary{margin-bottom:10px}
   </section>
 
   <section class="panel" id="idle-view" aria-label="Start">
+    <div class="seg" id="source-seg" role="radiogroup" aria-label="What to record" hidden>
+      <button class="seg-b" role="radio" aria-checked="true" data-src="mic">In the room<small>microphone</small></button>
+      <button class="seg-b" role="radio" aria-checked="false" data-src="call">Call<small>Teams, Zoom, Meet + mic</small></button>
+    </div>
+    <p class="hint" id="call-hint" hidden>After you tap Start, choose <b>Entire screen</b> in the share window and switch on <b>Share system audio</b>. Use a headset so the other side is not recorded twice.</p>
     <div class="stack">
       <button class="btn primary wide" id="start">Start recording</button>
       <button class="btn wide" id="check-btn">Check setup (5 seconds)</button>
     </div>
     <ul class="checks" id="checks" hidden></ul>
     <audio id="check-audio" controls hidden></audio>
-    <p class="hint">Once started, the page shows only your notes and a small dot at the bottom. The phone makes no sounds. Keep the screen on; on iPhone, locking it or switching apps stops the microphone. Use Dark to black out the screen.</p>
+    <p class="hint" id="hint-phone">Once started, the page shows only your notes and a small dot at the bottom. The app makes no sounds. Keep the screen on; on iPhone, locking it or switching apps stops the microphone. Use Dark to black out the screen.</p>
+    <p class="hint" id="hint-desk" hidden>Once started, the page shows only your notes and a small dot at the bottom. The app makes no sounds. You can switch to other windows; keep this tab open until you tap End.</p>
   </section>
 
   <section class="panel" id="live-view" aria-labelledby="notes-h" hidden>
@@ -174,11 +185,11 @@ details[open] summary{margin-bottom:10px}
   </section>
 
   <section class="panel" id="list-panel" aria-labelledby="list-h">
-    <h2 id="list-h">Recordings on this phone</h2>
+    <h2 id="list-h">Saved recordings</h2>
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v1.3</span></footer>
+  <footer><span id="storage"></span><span id="offline">v1.4</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -196,7 +207,7 @@ details[open] summary{margin-bottom:10px}
 </div>
 
 <div class="alarm" id="alarm" hidden role="alertdialog" aria-label="Recording stopped">
-  <p id="alarm-p">The phone stopped the microphone. Everything so far is saved.</p>
+  <p id="alarm-p">Recording stopped (microphone taken, or sharing ended). Everything so far is saved.</p>
   <button class="big" id="alarm-resume">Resume</button>
   <button class="lite" id="alarm-stop">End and save</button>
 </div>
@@ -207,7 +218,7 @@ details[open] summary{margin-bottom:10px}
 const $ = s => document.querySelector(s);
 const els = {
   title: $('#title'), attendees: $('#attendees'), attBox: $('#att-box'),
-  start: $('#start'), checkBtn: $('#check-btn'), checks: $('#checks'), checkAudio: $('#check-audio'),
+  start: $('#start'), sourceSeg: $('#source-seg'), callHint: $('#call-hint'), checkBtn: $('#check-btn'), checks: $('#checks'), checkAudio: $('#check-audio'),
   idle: $('#idle-view'), live: $('#live-view'), listPanel: $('#list-panel'),
   types: $('#types'), markers: $('#markers'), markersEmpty: $('#markers-empty'), interrupt: $('#interrupt'),
   dock: $('#dock'), dotbtn: $('#dotbtn'), peek: $('#peek'), pause: $('#pause'), pocketBtn: $('#pocket-btn'), stop: $('#stop'),
@@ -218,7 +229,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.3';
+const VERSION = 'v1.4';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -278,9 +289,14 @@ function newContext(){
   try { ctx.resume(); } catch {}
   return ctx;
 }
-async function openCapture(ctx, stream, onBlock){
+async function openCapture(ctx, inputs, onBlock){
   await ctx.audioWorklet.addModule('rec-worklet.js');
-  const src = ctx.createMediaStreamSource(stream);
+  // each input is a MediaStream with one audio track (mic, and in Call mode the system audio);
+  // they are summed, then a compressor keeps the mix from clipping
+  const mix = ctx.createGain(); mix.gain.value = inputs.length > 1 ? 0.7 : 1;
+  const srcs = inputs.map(st => { const n = ctx.createMediaStreamSource(st); n.connect(mix); return n; });
+  let src = mix;
+  if (inputs.length > 1) { const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -12; comp.ratio.value = 6; comp.attack.value = 0.005; comp.release.value = 0.2; mix.connect(comp); src = comp; }
   const lp1 = ctx.createBiquadFilter(); lp1.type = 'lowpass'; lp1.frequency.value = 7000; lp1.Q.value = 0.707;
   const lp2 = ctx.createBiquadFilter(); lp2.type = 'lowpass'; lp2.frequency.value = 7000; lp2.Q.value = 0.707;
   const node = new AudioWorkletNode(ctx, 'pcm16k-capture', {numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 1, channelCountMode: 'explicit', channelInterpretation: 'speakers'});
@@ -292,7 +308,7 @@ async function openCapture(ctx, stream, onBlock){
   return {
     ctx, node,
     flush(){ return new Promise(res => { onFinal = res; node.port.postMessage('flush'); setTimeout(() => { if (onFinal) { onFinal = null; res(); } }, 1500); }); },
-    close(){ try { src.disconnect(); node.disconnect(); mute.disconnect(); } catch {} try { ctx.close(); } catch {} }
+    close(){ try { srcs.forEach(n => n.disconnect()); mix.disconnect(); src.disconnect(); node.disconnect(); mute.disconnect(); } catch {} try { ctx.close(); } catch {} }
   };
 }
 function wavHeader(dataBytes){
@@ -319,6 +335,38 @@ async function getStream(){
   }});
 }
 
+let source = 'mic';
+const canCall = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && matchMedia('(pointer:fine)').matches;
+function setSource(v){
+  source = v;
+  els.sourceSeg.querySelectorAll('[data-src]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.src === v)));
+  els.callHint.hidden = v !== 'call';
+  try { localStorage.setItem('fn-source', v); } catch {}
+}
+// Returns {all: MediaStream of every track to stop later, inputs: [MediaStream per audio source]}
+async function acquire(mode){
+  if (mode !== 'call') { const mic = await getStream(); return {all: mic, inputs: [mic]}; }
+  const disp = await navigator.mediaDevices.getDisplayMedia({
+    video: {width: {max: 640}, frameRate: {max: 1}},
+    audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false},
+    systemAudio: 'include', selfBrowserSurface: 'exclude', surfaceSwitching: 'exclude', monitorTypeSurfaces: 'include'
+  });
+  const sys = disp.getAudioTracks();
+  if (!sys.length) {
+    disp.getTracks().forEach(t => t.stop());
+    const err = new Error('No call audio was shared. Choose Entire screen and switch on Share system audio.'); err.name = 'NoSystemAudio'; throw err;
+  }
+  let mic;
+  try { mic = await getStream(); } catch (e) { disp.getTracks().forEach(t => t.stop()); throw e; }
+  const all = new MediaStream([...disp.getTracks(), ...mic.getAudioTracks()]);
+  return {all, inputs: [new MediaStream([sys[0]]), mic]};
+}
+function captureError(e){
+  if (e.name === 'NoSystemAudio') return e.message;
+  if (e.name === 'NotAllowedError') return source === 'call' ? 'Sharing was cancelled or blocked. Tap Start again and allow screen and audio sharing.' : 'Microphone access was blocked. Allow it for this site in your browser settings, then try again.';
+  return `Could not start capture (${e.name}).`;
+}
+
 function showLive(on){
   els.idle.hidden = on; els.live.hidden = !on; els.dock.hidden = !on; els.listPanel.hidden = on;
   els.title.disabled = on;
@@ -327,22 +375,23 @@ function showLive(on){
 
 async function startMeeting(){
   const ctx = newContext();
-  let stream;
-  try { stream = await getStream(); }
-  catch (e) { try { ctx.close(); } catch {} showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings, then try again.' : `Could not open the microphone (${e.name}).`); return; }
+  let acq;
+  try { acq = await acquire(source); }
+  catch (e) { try { ctx.close(); } catch {} showError(captureError(e)); return; }
+  els.support.hidden = true;
   const free = await freeBytes();
   if (free !== null && free < BYTES_PER_HOUR * 1.5) showError(`Low phone storage: about ${Math.max(0, free / BYTES_PER_HOUR).toFixed(1)} hours of recording space left.`);
   const meeting = {
     id: uid(), title: els.title.value.trim() || defaultTitle(), attendees: els.attendees.value.trim(),
     createdAt: Date.now(), durationMs: 0, format: 'pcm16', mime: 'audio/wav', ext: 'wav', parts: 0, bytes: 0,
-    status: 'recording', markers: []
+    status: 'recording', markers: [], source
   };
   els.title.value = meeting.title;
   await saveMeeting(meeting);
   R = { meeting, stream: null, cap: null, samples: 0, running: false, buf: [], bufSamples: 0, seq: 0, writes: Promise.resolve(), stopping: false };
   els.checks.hidden = true; els.checkAudio.hidden = true; els.checkAudio.pause();
   showLive(true);
-  try { await beginPart(stream, ctx); }
+  try { await beginPart(acq, ctx); }
   catch (e) { showError('Could not start audio capture: ' + e.message); }
   requestPersist(); keepAwake();
   renderMarkers();
@@ -357,14 +406,17 @@ function commitChunk(){
   R.writes = R.writes.then(() => addChunk({meetingId: m.id, part, seq, blob})).then(() => saveMeeting(m)).catch(err => showError('Could not save audio to this phone: ' + err.message));
 }
 
-async function beginPart(stream, ctx){
+async function beginPart(acq, ctx){
+  const stream = acq.all;
   R.stream = stream;
   R.meeting.parts += 1; R.seq = 0;
-  R.cap = await openCapture(ctx, stream, ({pcm}) => {
+  R.cap = await openCapture(ctx, acq.inputs, ({pcm}) => {
     if (!R || !R.running || !pcm.length) return;
     R.buf.push(pcm); R.bufSamples += pcm.length; R.samples += pcm.length;
     if (R.bufSamples >= CHUNK_SAMPLES) commitChunk();
   });
+  // in Call mode, "Stop sharing" ends the screen video track too
+  stream.getVideoTracks().forEach(t => { t.onended = () => onInterrupted(); });
   stream.getAudioTracks().forEach(t => {
     t.onended = () => onInterrupted();
     // iOS mutes the track during a phone call or when another app takes the mic
@@ -413,11 +465,11 @@ async function onInterrupted(){
 
 async function resumeAfterInterrupt(){
   const ctx = newContext();
-  let stream;
-  try { stream = await getStream(); } catch (e) { try { ctx.close(); } catch {} showError('Could not reopen the microphone. Close other apps using it and tap Resume again.'); return; }
+  let acq;
+  try { acq = await acquire(R.meeting.source || 'mic'); } catch (e) { try { ctx.close(); } catch {} showError(captureError(e) + ' Then tap Resume again.'); return; }
   els.alarm.hidden = true;
   R.interrupted = false; R.meeting.status = 'recording';
-  try { await beginPart(stream, ctx); } catch (e) { showError('Could not restart audio capture: ' + e.message); return; }
+  try { await beginPart(acq, ctx); } catch (e) { showError('Could not restart audio capture: ' + e.message); return; }
   keepAwake();
 }
 
@@ -553,7 +605,7 @@ async function runCheck(){
   btn.textContent = 'Listening… say a few words from where you will sit';
   const levels = []; const pcms = []; let got = 0;
   let cap = null;
-  try { cap = await openCapture(ctx, stream, ({pcm}) => { if (pcm.length) { pcms.push(pcm); got += pcm.length; } }); } catch (e) { showError('Audio capture failed: ' + e.message); }
+  try { cap = await openCapture(ctx, [stream], ({pcm}) => { if (pcm.length) { pcms.push(pcm); got += pcm.length; } }); } catch (e) { showError('Audio capture failed: ' + e.message); }
   const stopListen = listen(ctx, stream, db => levels.push(db));
   await new Promise(r => setTimeout(r, 5000));
   stopListen();
@@ -614,6 +666,7 @@ function notesText(m, partsCount){
   const line = k => `${hms(k.t)}  [${TYPES[k.type || 'note']}] ${k.note || '(no note)'}`;
   const out = [
     m.title, new Date(m.createdAt).toLocaleString(), `Duration: ${hms(m.durationMs)}`,
+    m.source === 'call' ? 'Source: call audio + microphone' : 'Source: microphone (in the room)',
     partsCount > 1 ? `Audio parts: ${partsCount} (recording was interrupted; transcribe in order)` : null,
     '', 'Attendees:', m.attendees ? m.attendees.split('\n').filter(a => a.trim()).map(a => '- ' + a.trim()).join('\n') : '- (not recorded)',
     '', 'Markers (in order):', mk.length ? mk.map(line).join('\n') : '(none)'
@@ -662,7 +715,7 @@ async function renderList(){
   const ms = (await allMeetings()).sort((a, b) => b.createdAt - a.createdAt);
   els.list.innerHTML = '';
   const shown = ms.filter(m => !R || m.id !== R.meeting.id);
-  if (!shown.length) { const p = document.createElement('li'); p.className = 'empty'; p.textContent = 'No saved recordings yet. Your recordings stay on this phone until you share or delete them.'; els.list.append(p); return; }
+  if (!shown.length) { const p = document.createElement('li'); p.className = 'empty'; p.textContent = 'No saved recordings yet. Recordings stay on this device until you share or delete them.'; els.list.append(p); return; }
   for (const m of shown) {
     const li = document.createElement('li'); li.className = 'item';
     const head = document.createElement('div'); head.className = 'item-head';
@@ -704,7 +757,7 @@ function mkBtn(text, kind){ const b = document.createElement('button'); b.classN
 async function showStorage(){
   try {
     const e = await navigator.storage.estimate();
-    els.storage.textContent = `Using ${mb(e.usage || 0)} of phone storage for recordings. Audio is saved as 16 kHz WAV, about 115 MB per hour.`;
+    els.storage.textContent = `Using ${mb(e.usage || 0)} of storage for recordings. Audio is saved as 16 kHz WAV, about 115 MB per hour.`;
   } catch { els.storage.textContent = ''; }
 }
 function showError(msg){ els.support.textContent = msg; els.support.hidden = false; }
@@ -727,6 +780,13 @@ async function boot(){
   renderList(); showStorage(); showOffline();
 }
 els.start.addEventListener('click', startMeeting);
+if (canCall) {
+  els.sourceSeg.hidden = false;
+  $('#hint-phone').hidden = true; $('#hint-desk').hidden = false;
+  els.sourceSeg.addEventListener('click', e => { const b = e.target.closest('[data-src]'); if (b) setSource(b.dataset.src); });
+  let saved = 'mic'; try { saved = localStorage.getItem('fn-source') || 'mic'; } catch {}
+  setSource(saved);
+}
 els.stop.addEventListener('click', finish);
 els.pause.addEventListener('click', togglePause);
 els.pocketBtn.addEventListener('click', enterPocket);
