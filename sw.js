@@ -1,7 +1,7 @@
 // Offline cache for Meeting Recorder.
 // Page: network first with a 3 s timeout, then the cached copy (weak signal on site should not block opening).
 // Icons, manifest and fonts: cache first.
-const CACHE = 'mr-v15';
+const CACHE = 'mr-v16';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './rec-worklet.js'];
 
 self.addEventListener('install', e => {
@@ -27,7 +27,8 @@ self.addEventListener('fetch', e => {
     e.respondWith((async () => {
       const cache = await caches.open(CACHE);
       try {
-        const res = await Promise.race([fetch(req), timeout(3000)]);
+        // bypass the browser's HTTP cache (GitHub Pages sets max-age=600) so new versions show up on the next open
+        const res = await Promise.race([fetch(req, {cache: 'no-cache'}), timeout(3000)]);
         if (res && res.ok) cache.put('./index.html', res.clone());
         return res;
       } catch {

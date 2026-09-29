@@ -262,7 +262,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.10';
+const VERSION = 'v1.10.1';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -957,7 +957,7 @@ async function boot(){
   if (!window.isSecureContext) { showError('Open this page over https (or localhost). Browsers only allow the microphone on secure pages.'); els.start.disabled = true; els.checkBtn.disabled = true; }
   if (!navigator.mediaDevices || !(window.AudioContext || window.webkitAudioContext) || !('AudioWorkletNode' in window)) { showError('This browser cannot record audio. Use Safari on iPhone (iOS 14.5 or later) or Chrome on Android.'); els.start.disabled = true; els.checkBtn.disabled = true; }
   if ('serviceWorker' in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(showOffline).catch(() => {});
+    navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).then(r => { try { r.update(); } catch {} return navigator.serviceWorker.ready; }).then(showOffline).catch(() => {});
     navigator.serviceWorker.addEventListener('controllerchange', showOffline);
   }
   try { db = await openDB(); } catch { showError('Local storage is unavailable (private browsing?). Recordings cannot be saved.'); els.start.disabled = true; return; }
