@@ -164,7 +164,7 @@ details[open] summary{margin-bottom:10px}
       <button class="seg-b" role="radio" aria-checked="false" data-src="call">Call<small>Teams, Zoom, Meet + mic</small></button>
     </div>
     <p class="hint" id="call-hint" hidden>After you tap Start, choose <b>Entire screen</b> in the share window and switch on <b>Share system audio</b>. Use a headset so the other side is not recorded twice.</p>
-    <label class="toggle" for="boost"><input type="checkbox" id="boost" checked> <span><b>Boost quiet voices</b><small>Filters rumble, raises and evens out distant speakers. Recommended for a phone on a table.</small></span></label>
+    <label class="toggle" for="boost"><input type="checkbox" id="boost" checked> <span><b>Auto level</b><small>Filters rumble and adjusts itself during the meeting so quiet and distant speakers come through. Recommended for a phone on a table.</small></span></label>
     <div class="stack">
       <button class="btn primary wide" id="start">Start recording</button>
       <button class="btn wide" id="check-btn">Check setup (5 seconds)</button>
@@ -192,7 +192,7 @@ details[open] summary{margin-bottom:10px}
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v1.6</span></footer>
+  <footer><span id="storage"></span><span id="offline">v1.7</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -232,7 +232,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.6';
+const VERSION = 'v1.7';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -292,23 +292,27 @@ function newContext(){
   try { ctx.resume(); } catch {}
   return ctx;
 }
-async function openCapture(ctx, inputs, onBlock){
+async function openCapture(ctx, inputs, onBlock, startGainDb){
   await ctx.audioWorklet.addModule('rec-worklet.js');
   // each input is a MediaStream with one audio track (mic, and in Call mode the system audio);
   // they are summed, then a compressor keeps the mix from clipping
   const mix = ctx.createGain(); mix.gain.value = inputs.length > 1 ? 0.7 : 1;
   // inputs: [{stream, boost}]. Boost = rumble filter + ~12 dB gain + leveller + limiter (for a phone mic in a room)
   const nodes = [];
+  let agc = null;
   const srcs = inputs.map(({stream: st, boost}) => {
     const n = ctx.createMediaStreamSource(st); nodes.push(n);
     if (!boost) { n.connect(mix); return n; }
     const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90; hp.Q.value = 0.54;
     const hp2 = ctx.createBiquadFilter(); hp2.type = 'highpass'; hp2.frequency.value = 90; hp2.Q.value = 1.31; // 4th-order Butterworth
-    const gain = ctx.createGain(); gain.gain.value = 4; // +12 dB
+    const gain = ctx.createGain();
+    // automatic level: measure the filtered mic before the gain, steer the gain slowly toward a steady speech level
+    const meterN = ctx.createAnalyser(); meterN.fftSize = 2048; hp2.connect(meterN);
+    agc = startAgc(ctx, meterN, gain, startGainDb);
     const lev = ctx.createDynamicsCompressor(); lev.threshold.value = -24; lev.knee.value = 12; lev.ratio.value = 4; lev.attack.value = 0.01; lev.release.value = 0.25;
     const lim = ctx.createDynamicsCompressor(); lim.threshold.value = -3; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.1;
     n.connect(hp); hp.connect(hp2); hp2.connect(gain); gain.connect(lev); lev.connect(lim); lim.connect(mix);
-    nodes.push(hp, hp2, gain, lev, lim);
+    nodes.push(hp, hp2, gain, lev, lim, meterN);
     return n;
   });
   let src = mix;
@@ -323,10 +327,46 @@ async function openCapture(ctx, inputs, onBlock){
   if (ctx.state !== 'running') { try { await ctx.resume(); } catch {} }
   return {
     ctx, node,
+    get agc(){ return agc ? agc.stats() : null; },
     flush(){ return new Promise(res => { onFinal = res; node.port.postMessage('flush'); setTimeout(() => { if (onFinal) { onFinal = null; res(); } }, 1500); }); },
-    close(){ try { nodes.forEach(n => n.disconnect()); mix.disconnect(); src.disconnect(); node.disconnect(); mute.disconnect(); } catch {} try { ctx.close(); } catch {} }
+    close(){ if (agc) agc.stop(); try { nodes.forEach(n => n.disconnect()); mix.disconnect(); src.disconnect(); node.disconnect(); mute.disconnect(); } catch {} try { ctx.close(); } catch {} }
   };
 }
+/* Automatic level control.
+   Every 100 ms: frame level of the (filtered) mic. Noise floor falls fast and rises slowly.
+   A frame counts as speech when it is 10 dB above the floor. The gain moves toward
+   TARGET - speech level, at most +2 dB/s up and -6 dB/s down, only while speech was heard
+   in the last 3 s, and never so high that the noise floor would exceed NOISE_CEIL. */
+const AGC = {TARGET: -22, NOISE_CEIL: -48, MIN: 0, MAX: 26, UP: 0.2, DOWN: 0.6, START: 12};
+function startAgc(ctx, analyser, gainNode, startDb){
+  const lin = db => Math.pow(10, db / 20);
+  const buf = new Float32Array(analyser.fftSize);
+  const st = {g: Number.isFinite(startDb) ? startDb : AGC.START, noise: -55, speech: null, last: -1e9, lo: Infinity, hi: -Infinity};
+  gainNode.gain.value = lin(st.g);
+  const id = setInterval(() => {
+    analyser.getFloatTimeDomainData(buf);
+    let q = 0; for (let i = 0; i < buf.length; i++) q += buf[i] * buf[i];
+    const lv = 10 * Math.log10(q / buf.length + 1e-12);
+    if (lv < st.noise) st.noise = 0.7 * st.noise + 0.3 * lv; else st.noise = Math.min(lv, st.noise + 0.05);
+    const now = performance.now();
+    if (lv > st.noise + 10) { const k = st.speech == null ? 1 : (lv > st.speech ? 0.25 : 0.05); st.speech = st.speech == null ? lv : st.speech + k * (lv - st.speech); st.last = now; } // react fast to louder speech, slowly to quieter
+    if (st.speech == null || now - st.last > 3000) return; // silence: hold
+    let target = AGC.TARGET - st.speech;
+    target = Math.min(target, AGC.NOISE_CEIL - st.noise);
+    target = Math.max(AGC.MIN, Math.min(AGC.MAX, target));
+    const d = target - st.g;
+    st.g += d > 0 ? Math.min(d, AGC.UP) : Math.max(d, -AGC.DOWN);
+    try { gainNode.gain.setTargetAtTime(lin(st.g), ctx.currentTime, 0.08); } catch { gainNode.gain.value = lin(st.g); }
+    st.lo = Math.min(st.lo, st.g); st.hi = Math.max(st.hi, st.g);
+  }, 100);
+  return {
+    stop(){ clearInterval(id); },
+    stats(){ return {gain: st.g, lo: Number.isFinite(st.lo) ? st.lo : st.g, hi: Number.isFinite(st.hi) ? st.hi : st.g, noise: st.noise}; }
+  };
+}
+function lastGain(){ try { const v = parseFloat(localStorage.getItem('fn-gain')); return Number.isFinite(v) ? v : undefined; } catch { return undefined; } }
+function rememberGain(g){ try { localStorage.setItem('fn-gain', g.toFixed(1)); } catch {} }
+
 function wavHeader(dataBytes){
   const h = new DataView(new ArrayBuffer(44));
   const w = (o, s) => { for (let i = 0; i < s.length; i++) h.setUint8(o + i, s.charCodeAt(i)); };
@@ -438,11 +478,12 @@ async function beginPart(acq, ctx){
   if (source === 'call') R.meeting.source = 'call';
   els.partNote.hidden = R.meeting.parts < 2;
   els.partNote.textContent = `Part ${R.meeting.parts} of this meeting. Earlier audio is kept.`;
+  const startGain = Number.isFinite(R.meeting.agcGain) ? R.meeting.agcGain : lastGain();
   R.cap = await openCapture(ctx, acq.inputs, ({pcm}) => {
     if (!R || !R.running || !pcm.length) return;
     R.buf.push(pcm); R.bufSamples += pcm.length; R.samples += pcm.length;
     if (R.bufSamples >= CHUNK_SAMPLES) commitChunk();
-  });
+  }, startGain);
   // in Call mode, "Stop sharing" ends the screen video track too
   stream.getVideoTracks().forEach(t => { t.onended = () => onInterrupted(); });
   stream.getAudioTracks().forEach(t => {
@@ -469,6 +510,8 @@ async function closePart(){
   const was = R.running; R.running = true;  // accept the final partial block
   await cap.flush();
   R.running = was;
+  const a = cap.agc;
+  if (a) { const m = R.meeting; m.agcGain = a.gain; m.agcLo = Math.min(m.agcLo ?? a.lo, a.lo); m.agcHi = Math.max(m.agcHi ?? a.hi, a.hi); rememberGain(a.gain); }
   cap.close();
   commitChunk();
 }
@@ -637,7 +680,7 @@ async function runCheck(){
   btn.textContent = 'Listening… say a few words from where you will sit';
   const levels = []; const pcms = []; let got = 0;
   let cap = null;
-  try { cap = await openCapture(ctx, [{stream, boost}], ({pcm}) => { if (pcm.length) { pcms.push(pcm); got += pcm.length; } }); } catch (e) { showError('Audio capture failed: ' + e.message); }
+  try { cap = await openCapture(ctx, [{stream, boost}], ({pcm}) => { if (pcm.length) { pcms.push(pcm); got += pcm.length; } }, lastGain()); } catch (e) { showError('Audio capture failed: ' + e.message); }
   await new Promise(r => setTimeout(r, 5000));
   if (cap) { await cap.flush(); cap.close(); } else { try { ctx.close(); } catch {} }
   stream.getTracks().forEach(t => t.stop());
@@ -704,7 +747,7 @@ function notesText(m, partsCount){
   const out = [
     m.title, new Date(m.createdAt).toLocaleString(), `Duration: ${hms(m.durationMs)}`,
     m.source === 'call' ? 'Source: call audio + microphone' : 'Source: microphone (in the room)',
-    m.boost ? 'Processing: voice boost on (rumble filter, gain, leveller)' : (m.format === 'pcm16' ? 'Processing: none' : null),
+    m.boost ? `Processing: auto level on (rumble filter, adaptive gain${Number.isFinite(m.agcLo) ? ` ${m.agcLo.toFixed(0)} to ${m.agcHi.toFixed(0)} dB` : ''}, leveller)` : (m.format === 'pcm16' ? 'Processing: none' : null),
     !merged && partsCount > 1 ? `Audio parts: ${partsCount} (transcribe in order)` : null,
     '', 'Attendees:', m.attendees ? m.attendees.split('\n').filter(a => a.trim()).map(a => '- ' + a.trim()).join('\n') : '- (not recorded)'
   ];
