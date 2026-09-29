@@ -60,6 +60,9 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .btn.small{font-size:13px;padding:6px 10px;min-height:36px}
 .btn.wide{width:100%}
 .stack{display:flex;flex-direction:column;gap:10px}
+.toggle{flex-direction:row;align-items:flex-start;gap:10px;color:var(--ink);font-size:15px;cursor:pointer}
+.toggle input{width:20px;height:20px;margin:2px 0 0;accent-color:var(--accent);flex:none}
+.toggle small{display:block;font-size:13px;color:var(--muted)}
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg-b{font:inherit;font-size:15px;font-weight:500;background:var(--panel);color:var(--muted);border:0;padding:10px 8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px}
 .seg-b+.seg-b{border-left:1px solid var(--line)}
@@ -161,6 +164,7 @@ details[open] summary{margin-bottom:10px}
       <button class="seg-b" role="radio" aria-checked="false" data-src="call">Call<small>Teams, Zoom, Meet + mic</small></button>
     </div>
     <p class="hint" id="call-hint" hidden>After you tap Start, choose <b>Entire screen</b> in the share window and switch on <b>Share system audio</b>. Use a headset so the other side is not recorded twice.</p>
+    <label class="toggle" for="boost"><input type="checkbox" id="boost" checked> <span><b>Boost quiet voices</b><small>Filters rumble, raises and evens out distant speakers. Recommended for a phone on a table.</small></span></label>
     <div class="stack">
       <button class="btn primary wide" id="start">Start recording</button>
       <button class="btn wide" id="check-btn">Check setup (5 seconds)</button>
@@ -188,7 +192,7 @@ details[open] summary{margin-bottom:10px}
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v1.5</span></footer>
+  <footer><span id="storage"></span><span id="offline">v1.6</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -217,7 +221,7 @@ details[open] summary{margin-bottom:10px}
 const $ = s => document.querySelector(s);
 const els = {
   title: $('#title'), attendees: $('#attendees'), attBox: $('#att-box'),
-  start: $('#start'), sourceSeg: $('#source-seg'), callHint: $('#call-hint'), checkBtn: $('#check-btn'), checks: $('#checks'), checkAudio: $('#check-audio'),
+  start: $('#start'), boostBox: $('#boost'), sourceSeg: $('#source-seg'), callHint: $('#call-hint'), checkBtn: $('#check-btn'), checks: $('#checks'), checkAudio: $('#check-audio'),
   idle: $('#idle-view'), live: $('#live-view'), listPanel: $('#list-panel'),
   types: $('#types'), noteIn: $('#note-in'), noteAdd: $('#note-add'), partNote: $('#part-note'), markers: $('#markers'), markersEmpty: $('#markers-empty'), interrupt: $('#interrupt'),
   dock: $('#dock'), dotbtn: $('#dotbtn'), peek: $('#peek'), pause: $('#pause'), pocketBtn: $('#pocket-btn'), stop: $('#stop'),
@@ -228,7 +232,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.5';
+const VERSION = 'v1.6';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -293,7 +297,20 @@ async function openCapture(ctx, inputs, onBlock){
   // each input is a MediaStream with one audio track (mic, and in Call mode the system audio);
   // they are summed, then a compressor keeps the mix from clipping
   const mix = ctx.createGain(); mix.gain.value = inputs.length > 1 ? 0.7 : 1;
-  const srcs = inputs.map(st => { const n = ctx.createMediaStreamSource(st); n.connect(mix); return n; });
+  // inputs: [{stream, boost}]. Boost = rumble filter + ~12 dB gain + leveller + limiter (for a phone mic in a room)
+  const nodes = [];
+  const srcs = inputs.map(({stream: st, boost}) => {
+    const n = ctx.createMediaStreamSource(st); nodes.push(n);
+    if (!boost) { n.connect(mix); return n; }
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90; hp.Q.value = 0.54;
+    const hp2 = ctx.createBiquadFilter(); hp2.type = 'highpass'; hp2.frequency.value = 90; hp2.Q.value = 1.31; // 4th-order Butterworth
+    const gain = ctx.createGain(); gain.gain.value = 4; // +12 dB
+    const lev = ctx.createDynamicsCompressor(); lev.threshold.value = -24; lev.knee.value = 12; lev.ratio.value = 4; lev.attack.value = 0.01; lev.release.value = 0.25;
+    const lim = ctx.createDynamicsCompressor(); lim.threshold.value = -3; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.1;
+    n.connect(hp); hp.connect(hp2); hp2.connect(gain); gain.connect(lev); lev.connect(lim); lim.connect(mix);
+    nodes.push(hp, hp2, gain, lev, lim);
+    return n;
+  });
   let src = mix;
   if (inputs.length > 1) { const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -12; comp.ratio.value = 6; comp.attack.value = 0.005; comp.release.value = 0.2; mix.connect(comp); src = comp; }
   const lp1 = ctx.createBiquadFilter(); lp1.type = 'lowpass'; lp1.frequency.value = 7000; lp1.Q.value = 0.707;
@@ -307,7 +324,7 @@ async function openCapture(ctx, inputs, onBlock){
   return {
     ctx, node,
     flush(){ return new Promise(res => { onFinal = res; node.port.postMessage('flush'); setTimeout(() => { if (onFinal) { onFinal = null; res(); } }, 1500); }); },
-    close(){ try { srcs.forEach(n => n.disconnect()); mix.disconnect(); src.disconnect(); node.disconnect(); mute.disconnect(); } catch {} try { ctx.close(); } catch {} }
+    close(){ try { nodes.forEach(n => n.disconnect()); mix.disconnect(); src.disconnect(); node.disconnect(); mute.disconnect(); } catch {} try { ctx.close(); } catch {} }
   };
 }
 function wavHeader(dataBytes){
@@ -335,6 +352,8 @@ async function getStream(){
 }
 
 let source = 'mic';
+let boost = true;
+try { boost = localStorage.getItem('fn-boost') !== 'off'; } catch {}
 const canCall = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && matchMedia('(pointer:fine)').matches;
 function setSource(v){
   source = v;
@@ -344,7 +363,7 @@ function setSource(v){
 }
 // Returns {all: MediaStream of every track to stop later, inputs: [MediaStream per audio source]}
 async function acquire(mode){
-  if (mode !== 'call') { const mic = await getStream(); return {all: mic, inputs: [mic]}; }
+  if (mode !== 'call') { const mic = await getStream(); return {all: mic, inputs: [{stream: mic, boost}]}; }
   const disp = await navigator.mediaDevices.getDisplayMedia({
     video: {width: {max: 640}, frameRate: {max: 1}},
     audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false},
@@ -358,7 +377,7 @@ async function acquire(mode){
   let mic;
   try { mic = await getStream(); } catch (e) { disp.getTracks().forEach(t => t.stop()); throw e; }
   const all = new MediaStream([...disp.getTracks(), ...mic.getAudioTracks()]);
-  return {all, inputs: [new MediaStream([sys[0]]), mic]};
+  return {all, inputs: [{stream: new MediaStream([sys[0]]), boost: false}, {stream: mic, boost}]};
 }
 function captureError(e){
   if (e.name === 'NoSystemAudio') return e.message;
@@ -383,7 +402,7 @@ async function startMeeting(existing){
   const meeting = existing || {
     id: uid(), title: els.title.value.trim() || defaultTitle(), attendees: els.attendees.value.trim(),
     createdAt: Date.now(), durationMs: 0, format: 'pcm16', mime: 'audio/wav', ext: 'wav', parts: 0, bytes: 0,
-    status: 'recording', markers: [], source, segments: []
+    status: 'recording', markers: [], source, boost, segments: []
   };
   if (existing) { meeting.status = 'recording'; meeting.segments = meeting.segments || []; els.attendees.value = meeting.attendees || ''; }
   els.title.value = meeting.title;
@@ -618,13 +637,16 @@ async function runCheck(){
   btn.textContent = 'Listening… say a few words from where you will sit';
   const levels = []; const pcms = []; let got = 0;
   let cap = null;
-  try { cap = await openCapture(ctx, [stream], ({pcm}) => { if (pcm.length) { pcms.push(pcm); got += pcm.length; } }); } catch (e) { showError('Audio capture failed: ' + e.message); }
-  const stopListen = listen(ctx, stream, db => levels.push(db));
+  try { cap = await openCapture(ctx, [{stream, boost}], ({pcm}) => { if (pcm.length) { pcms.push(pcm); got += pcm.length; } }); } catch (e) { showError('Audio capture failed: ' + e.message); }
   await new Promise(r => setTimeout(r, 5000));
-  stopListen();
   if (cap) { await cap.flush(); cap.close(); } else { try { ctx.close(); } catch {} }
   stream.getTracks().forEach(t => t.stop());
   const capturedSec = got / RATE;
+  // level of what is actually recorded, in 30 ms windows
+  for (const a of pcms) for (let i = 0; i + 480 <= a.length; i += 480) {
+    let q = 0; for (let j = i; j < i + 480; j++) { const v = a[j] / 32768; q += v * v; }
+    levels.push(20 * Math.log10(Math.sqrt(q / 480) + 1e-8));
+  }
 
   // speech level: use the loud end of the distribution, not a single click
   levels.sort((a, b) => a - b);
@@ -682,6 +704,7 @@ function notesText(m, partsCount){
   const out = [
     m.title, new Date(m.createdAt).toLocaleString(), `Duration: ${hms(m.durationMs)}`,
     m.source === 'call' ? 'Source: call audio + microphone' : 'Source: microphone (in the room)',
+    m.boost ? 'Processing: voice boost on (rumble filter, gain, leveller)' : (m.format === 'pcm16' ? 'Processing: none' : null),
     !merged && partsCount > 1 ? `Audio parts: ${partsCount} (transcribe in order)` : null,
     '', 'Attendees:', m.attendees ? m.attendees.split('\n').filter(a => a.trim()).map(a => '- ' + a.trim()).join('\n') : '- (not recorded)'
   ];
@@ -806,6 +829,8 @@ async function boot(){
   renderList(); showStorage(); showOffline();
 }
 els.start.addEventListener('click', () => startMeeting());
+els.boostBox.checked = boost;
+els.boostBox.addEventListener('change', () => { boost = els.boostBox.checked; try { localStorage.setItem('fn-boost', boost ? 'on' : 'off'); } catch {} });
 if (canCall) {
   els.sourceSeg.hidden = false;
   $('#hint-phone').hidden = true; $('#hint-desk').hidden = false;
