@@ -181,7 +181,7 @@ details[open] summary{margin-bottom:10px}
         <button class="seg-b" role="radio" aria-checked="true" data-src="mic">In the room<small>microphone</small></button>
         <button class="seg-b" role="radio" aria-checked="false" data-src="call">Call<small>Teams, Zoom, Meet + mic</small></button>
       </div>
-      <p class="hint" id="call-hint" hidden>After Start, pick <b>Entire screen</b> and switch on <b>Share system audio</b>. Use a headset.</p>
+      <p class="hint" id="call-hint" hidden>After Start, click your screen, check <b>Share system audio</b> is on, then Share. Use a headset.</p>
       <label class="toggle" for="boost"><input type="checkbox" id="boost" checked> <span><b>Auto level</b><small>Evens out quiet and distant voices.</small></span></label>
       <button class="btn primary wide" id="start">Start recording</button>
       <div class="subrow">
@@ -251,7 +251,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.9.1';
+const VERSION = 'v1.9.2';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -424,7 +424,7 @@ function setSource(v){
 async function acquire(mode){
   if (mode !== 'call') { const mic = await getStream(); return {all: mic, inputs: [{stream: mic, boost}]}; }
   const disp = await navigator.mediaDevices.getDisplayMedia({
-    video: {width: {max: 640}, frameRate: {max: 1}},
+    video: {displaySurface: 'monitor', width: {max: 640}, frameRate: {max: 1}}, // opens the picker on Entire screen
     audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false},
     systemAudio: 'include', selfBrowserSurface: 'exclude', surfaceSwitching: 'exclude', monitorTypeSurfaces: 'include'
   });
