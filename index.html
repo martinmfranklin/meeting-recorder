@@ -79,6 +79,7 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .checks li{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start;font-size:14px}
 .checks b{font-weight:600}
 .checks .mark{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;background:var(--ok-soft);color:var(--ok)}
+.checks .info .mark{background:var(--bg);color:var(--muted)}
 .checks .warn .mark{background:var(--warn-soft);color:var(--warn)}
 .checks .bad .mark{background:var(--danger-soft);color:var(--danger)}
 .checks .detail{display:block;color:var(--muted);font-size:13px}
@@ -217,7 +218,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 29e6;
-const VERSION = 'v1.2';
+const VERSION = 'v1.2.1';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -522,20 +523,20 @@ async function runCheck(){
   const p90 = levels.length ? levels[Math.floor(levels.length * 0.9)] : -120;
   const max = levels.length ? levels[levels.length - 1] : -120;
   const results = [];
-  if (p90 > -35) results.push(['ok', 'Microphone level good', `Speech peaks around ${Math.round(p90)} dBFS.`]);
-  else if (p90 > -50) results.push(['warn', 'Microphone level low', `Speech peaks around ${Math.round(p90)} dBFS. Move the phone toward the middle of the table, screen down or up, away from laptops and vents.`]);
+  if (p90 > -42) results.push(['ok', 'Microphone level good', `Speech peaks around ${Math.round(p90)} dBFS.`]);
+  else if (p90 > -55) results.push(['warn', 'Microphone level low', `Speech peaks around ${Math.round(p90)} dBFS. Move the phone toward the middle of the table, away from laptops and vents.`]);
   else if (max > -40) results.push(['warn', 'Heard only a brief sound', 'Run the check again and keep talking for the full 5 seconds.']);
   else results.push(['bad', 'Almost nothing heard', 'Check that nothing covers the bottom of the phone and that no other app is using the microphone.']);
 
   const free = await freeBytes();
   if (free === null) results.push(['warn', 'Storage not reported', 'Check free space in your phone settings.']);
-  else { const h = free / BYTES_PER_HOUR; results.push([h < 1.5 ? 'bad' : h < 4 ? 'warn' : 'ok', `Storage: about ${h > 99 ? '99+' : h.toFixed(1)} hours free`, `${mb(free)} available to this app.`]); }
+  else { const h = free / BYTES_PER_HOUR; results.push([h < 1.5 ? 'bad' : h < 4 ? 'warn' : 'ok', (h > 99 ? 'Storage: 99+ hours free' : `Storage: about ${h.toFixed(1)} hours free`), `${mb(free)} available to this app.`]); }
 
   try {
     if (navigator.getBattery) {
       const b = await navigator.getBattery(); const pct = Math.round(b.level * 100);
       results.push([b.charging || pct >= 40 ? 'ok' : pct >= 20 ? 'warn' : 'bad', `Battery ${pct}%${b.charging ? ', charging' : ''}`, b.charging || pct >= 40 ? 'Screen-on recording uses roughly 10 to 15% per hour; less with Dark on.' : 'Plug in if the meeting runs over an hour.']);
-    } else results.push(['warn', 'Battery not reported by this browser', 'Screen-on recording uses roughly 10 to 15% per hour. Plug in for long meetings.']);
+    } else results.push(['info', 'Battery: check it yourself', 'iPhone does not share battery level with web apps. Screen-on recording uses roughly 10 to 15% per hour; plug in for long meetings.']);
   } catch {}
 
   results.push('wakeLock' in navigator
@@ -543,12 +544,12 @@ async function runCheck(){
     : ['bad', 'This browser cannot keep the screen awake', 'Set Auto-Lock to Never for this meeting (iPhone: Settings, Display & Brightness, Auto-Lock).']);
 
   const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
-  results.push(sw ? ['ok', 'Works offline', 'The app will open with no signal.'] : ['warn', 'Not yet available offline', 'Open the app once more while you have a connection.']);
+  results.push(sw ? ['ok', 'Works offline', 'The app will open with no signal.'] : ['warn', 'Not yet available offline', 'Open the app in Safari (not inside another app), add it to your Home Screen, and open it once while online.']);
 
   els.checks.innerHTML = '';
   for (const [lvl, head, detail] of results) {
     const li = document.createElement('li'); li.className = lvl;
-    const m = document.createElement('span'); m.className = 'mark'; m.textContent = lvl === 'ok' ? '✓' : '!';
+    const m = document.createElement('span'); m.className = 'mark'; m.textContent = lvl === 'ok' ? '✓' : lvl === 'info' ? 'i' : '!';
     const tx = document.createElement('span'); const b = document.createElement('b'); b.textContent = head;
     const d = document.createElement('span'); d.className = 'detail'; d.textContent = detail;
     tx.append(b, d); li.append(m, tx); els.checks.append(li);
