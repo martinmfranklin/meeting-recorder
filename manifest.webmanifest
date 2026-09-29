@@ -1,6 +1,6 @@
 {
-  "name": "Meeting Recorder",
-  "short_name": "Recorder",
+  "name": "Field Notes",
+  "short_name": "Field Notes",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
