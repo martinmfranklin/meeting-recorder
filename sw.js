@@ -1,8 +1,8 @@
 // Offline cache for Meeting Recorder.
 // Page: network first with a 3 s timeout, then the cached copy (weak signal on site should not block opening).
 // Icons, manifest and fonts: cache first.
-const CACHE = 'mr-v5';
-const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
+const CACHE = 'mr-v6';
+const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './rec-worklet.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));

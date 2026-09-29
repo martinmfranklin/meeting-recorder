@@ -217,8 +217,8 @@ const els = {
 els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
-const BYTES_PER_HOUR = 29e6;
-const VERSION = 'v1.2.2';
+const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
+const VERSION = 'v1.3';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -264,21 +264,54 @@ function mb(bytes){ return bytes < 1e6 ? `${Math.round(bytes/1e3)} KB` : bytes <
 function slug(t){ return (t || 'meeting').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'meeting'; }
 function stamp(d){ d = new Date(d); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; }
 function uid(){ return (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)); }
-function pickMime(){
-  const opts = ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
-  for (const t of opts) if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) return t;
-  return '';
-}
-function extFor(mime){ return /mp4/.test(mime) ? 'm4a' : /ogg/.test(mime) ? 'ogg' : 'webm'; }
 function defaultTitle(){ const d = new Date(); return `Meeting ${d.toLocaleDateString(undefined,{month:'short',day:'numeric'})} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 async function freeBytes(){ try { const e = await navigator.storage.estimate(); return (e.quota || 0) - (e.usage || 0); } catch { return null; } }
+
+/* ---------- audio capture: 16 kHz mono PCM via AudioWorklet (avoids Safari's MediaRecorder bugs) ---------- */
+const RATE = 16000;
+const CHUNK_SAMPLES = RATE * 5; // write to storage every 5 s
+
+function newContext(){
+  // Must be created inside the tap handler so iOS lets it run.
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  try { ctx.resume(); } catch {}
+  return ctx;
+}
+async function openCapture(ctx, stream, onBlock){
+  await ctx.audioWorklet.addModule('rec-worklet.js');
+  const src = ctx.createMediaStreamSource(stream);
+  const lp1 = ctx.createBiquadFilter(); lp1.type = 'lowpass'; lp1.frequency.value = 7000; lp1.Q.value = 0.707;
+  const lp2 = ctx.createBiquadFilter(); lp2.type = 'lowpass'; lp2.frequency.value = 7000; lp2.Q.value = 0.707;
+  const node = new AudioWorkletNode(ctx, 'pcm16k-capture', {numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 1, channelCountMode: 'explicit', channelInterpretation: 'speakers'});
+  const mute = ctx.createGain(); mute.gain.value = 0; // keeps the graph running; nothing is ever audible
+  src.connect(lp1); lp1.connect(lp2); lp2.connect(node); node.connect(mute); mute.connect(ctx.destination);
+  let onFinal = null;
+  node.port.onmessage = e => { onBlock(e.data); if (e.data.final && onFinal) { const f = onFinal; onFinal = null; f(); } };
+  if (ctx.state !== 'running') { try { await ctx.resume(); } catch {} }
+  return {
+    ctx, node,
+    flush(){ return new Promise(res => { onFinal = res; node.port.postMessage('flush'); setTimeout(() => { if (onFinal) { onFinal = null; res(); } }, 1500); }); },
+    close(){ try { src.disconnect(); node.disconnect(); mute.disconnect(); } catch {} try { ctx.close(); } catch {} }
+  };
+}
+function wavHeader(dataBytes){
+  const h = new DataView(new ArrayBuffer(44));
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) h.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); h.setUint32(4, 36 + dataBytes, true); w(8, 'WAVE');
+  w(12, 'fmt '); h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 1, true);
+  h.setUint32(24, RATE, true); h.setUint32(28, RATE * 2, true); h.setUint16(32, 2, true); h.setUint16(34, 16, true);
+  w(36, 'data'); h.setUint32(40, dataBytes, true);
+  return h.buffer;
+}
 
 /* ---------- recorder state ---------- */
 let R = null; // active session
 let wakeLock = null;
 
 function setState(s){ els.dock.dataset.s = s; }
-function elapsed(){ if (!R) return 0; return R.accMs + (R.running ? performance.now() - R.segStart : 0); }
+// elapsed = audio actually captured, so marker times line up with the audio file exactly
+function elapsed(){ return R ? R.samples / RATE * 1000 : 0; }
 
 async function getStream(){
   return navigator.mediaDevices.getUserMedia({audio: {
@@ -293,74 +326,82 @@ function showLive(on){
 }
 
 async function startMeeting(){
+  const ctx = newContext();
   let stream;
   try { stream = await getStream(); }
-  catch (e) { showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings, then try again.' : `Could not open the microphone (${e.name}).`); return; }
+  catch (e) { try { ctx.close(); } catch {} showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings, then try again.' : `Could not open the microphone (${e.name}).`); return; }
   const free = await freeBytes();
   if (free !== null && free < BYTES_PER_HOUR * 1.5) showError(`Low phone storage: about ${Math.max(0, free / BYTES_PER_HOUR).toFixed(1)} hours of recording space left.`);
-  const mime = pickMime();
   const meeting = {
     id: uid(), title: els.title.value.trim() || defaultTitle(), attendees: els.attendees.value.trim(),
-    createdAt: Date.now(), durationMs: 0, mime, ext: extFor(mime), parts: 0, bytes: 0,
+    createdAt: Date.now(), durationMs: 0, format: 'pcm16', mime: 'audio/wav', ext: 'wav', parts: 0, bytes: 0,
     status: 'recording', markers: []
   };
   els.title.value = meeting.title;
   await saveMeeting(meeting);
-  R = { meeting, stream: null, mr: null, accMs: 0, segStart: 0, running: false, writes: Promise.resolve(), stopping: false };
+  R = { meeting, stream: null, cap: null, samples: 0, running: false, buf: [], bufSamples: 0, seq: 0, writes: Promise.resolve(), stopping: false };
   els.checks.hidden = true; els.checkAudio.hidden = true; els.checkAudio.pause();
   showLive(true);
-  await beginPart(stream);
+  try { await beginPart(stream, ctx); }
+  catch (e) { showError('Could not start audio capture: ' + e.message); }
   requestPersist(); keepAwake();
   renderMarkers();
 }
 
-async function beginPart(stream){
+function commitChunk(){
+  if (!R || !R.bufSamples) return;
+  const blob = new Blob(R.buf, {type: 'application/octet-stream'});
+  const m = R.meeting, part = m.parts, seq = R.seq++;
+  R.buf = []; R.bufSamples = 0;
+  m.bytes += blob.size; m.durationMs = elapsed();
+  R.writes = R.writes.then(() => addChunk({meetingId: m.id, part, seq, blob})).then(() => saveMeeting(m)).catch(err => showError('Could not save audio to this phone: ' + err.message));
+}
+
+async function beginPart(stream, ctx){
   R.stream = stream;
-  R.meeting.parts += 1;
-  const part = R.meeting.parts; let seq = 0;
-  const opts = { audioBitsPerSecond: 64000 };
-  if (R.meeting.mime) opts.mimeType = R.meeting.mime;
-  const mr = new MediaRecorder(stream, opts);
-  if (!R.meeting.mime && mr.mimeType) { R.meeting.mime = mr.mimeType; R.meeting.ext = extFor(mr.mimeType); }
-  R.mr = mr;
-  mr.ondataavailable = e => {
-    if (!e.data || !e.data.size || !R) return;
-    const blob = e.data, m = R.meeting;
-    m.bytes += blob.size; m.durationMs = elapsed();
-    R.writes = R.writes.then(() => addChunk({meetingId: m.id, part, seq: seq++, blob})).then(() => saveMeeting(m)).catch(err => showError('Could not save audio to this phone: ' + err.message));
-  };
+  R.meeting.parts += 1; R.seq = 0;
+  R.cap = await openCapture(ctx, stream, ({pcm}) => {
+    if (!R || !R.running || !pcm.length) return;
+    R.buf.push(pcm); R.bufSamples += pcm.length; R.samples += pcm.length;
+    if (R.bufSamples >= CHUNK_SAMPLES) commitChunk();
+  });
   stream.getAudioTracks().forEach(t => {
     t.onended = () => onInterrupted();
     // iOS mutes the track during a phone call or when another app takes the mic
     t.onmute = () => { if (!R) return; clearTimeout(R.muteTimer); R.muteTimer = setTimeout(() => { if (R && !R.interrupted && t.muted) onInterrupted(); }, 3000); };
     t.onunmute = () => { if (R) clearTimeout(R.muteTimer); };
   });
-  mr.onerror = () => onInterrupted();
-  mr.start(5000); // flush to storage every 5 s so a crash loses at most a few seconds
-  R.segStart = performance.now(); R.running = true;
+  // iOS also suspends or "interrupts" the audio context during calls and Siri
+  ctx.onstatechange = () => {
+    if (!R || R.stopping || R.interrupted) return;
+    clearTimeout(R.ctxTimer);
+    if (ctx.state !== 'running') R.ctxTimer = setTimeout(() => { if (R && !R.interrupted && ctx.state !== 'running') onInterrupted(); }, 3000);
+  };
+  R.running = true;
   setState('recording');
   els.pause.textContent = 'Pause'; els.pocketBtn.disabled = false;
   els.types.hidden = false; els.interrupt.hidden = true;
 }
 
-function stopRecorder(){
-  return new Promise(res => {
-    const mr = R.mr;
-    if (!mr || mr.state === 'inactive') return res();
-    mr.onstop = () => res();
-    try { mr.stop(); } catch { res(); }
-  });
+async function closePart(){
+  if (!R.cap) return;
+  const cap = R.cap; R.cap = null;
+  const was = R.running; R.running = true;  // accept the final partial block
+  await cap.flush();
+  R.running = was;
+  cap.close();
+  commitChunk();
 }
 
 async function onInterrupted(){
   if (!R || R.stopping || R.interrupted) return;
   R.interrupted = true;
-  clearTimeout(R.muteTimer);
-  if (R.running) { R.accMs += performance.now() - R.segStart; R.running = false; }
-  await stopRecorder();
+  clearTimeout(R.muteTimer); clearTimeout(R.ctxTimer);
+  await closePart();
+  R.running = false;
   R.stream.getTracks().forEach(t => t.stop());
   await R.writes;
-  R.meeting.durationMs = R.accMs; R.meeting.status = 'interrupted';
+  R.meeting.durationMs = elapsed(); R.meeting.status = 'interrupted';
   await saveMeeting(R.meeting);
   setState('interrupted');
   els.interrupt.hidden = false;
@@ -371,11 +412,12 @@ async function onInterrupted(){
 }
 
 async function resumeAfterInterrupt(){
+  const ctx = newContext();
   let stream;
-  try { stream = await getStream(); } catch (e) { showError('Could not reopen the microphone. Close other apps using it and tap Resume again.'); return; }
+  try { stream = await getStream(); } catch (e) { try { ctx.close(); } catch {} showError('Could not reopen the microphone. Close other apps using it and tap Resume again.'); return; }
   els.alarm.hidden = true;
   R.interrupted = false; R.meeting.status = 'recording';
-  await beginPart(stream);
+  try { await beginPart(stream, ctx); } catch (e) { showError('Could not restart audio capture: ' + e.message); return; }
   keepAwake();
 }
 
@@ -383,10 +425,11 @@ function togglePause(){
   if (!R) return;
   if (R.interrupted) return resumeAfterInterrupt();
   if (R.running) {
-    R.mr.pause(); R.accMs += performance.now() - R.segStart; R.running = false;
+    R.running = false; commitChunk();
     R.meeting.status = 'paused'; setState('paused'); els.pause.textContent = 'Resume';
   } else {
-    R.mr.resume(); R.segStart = performance.now(); R.running = true;
+    R.running = true;
+    if (R.cap && R.cap.ctx.state !== 'running') { try { R.cap.ctx.resume(); } catch {} }
     R.meeting.status = 'recording'; setState('recording'); els.pause.textContent = 'Pause';
   }
   saveMeeting(R.meeting);
@@ -395,14 +438,14 @@ function togglePause(){
 async function finish(){
   if (!R) return;
   R.stopping = true;
-  clearTimeout(R.muteTimer);
+  clearTimeout(R.muteTimer); clearTimeout(R.ctxTimer);
   els.alarm.hidden = true; exitPocket();
-  if (R.running) { R.accMs += performance.now() - R.segStart; R.running = false; }
-  await stopRecorder();
+  await closePart();
+  R.running = false;
   R.stream && R.stream.getTracks().forEach(t => t.stop());
   await R.writes;
   const m = R.meeting;
-  m.durationMs = R.accMs; m.status = 'done';
+  m.durationMs = elapsed(); m.status = 'done';
   m.title = els.title.value.trim() || m.title; m.attendees = els.attendees.value.trim();
   await saveMeeting(m);
   R = null; releaseAwake();
@@ -452,7 +495,8 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !R) return;
   if (!R.interrupted) keepAwake();
   const live = R.stream && R.stream.getAudioTracks().some(t => t.readyState === 'live');
-  if (!R.interrupted && !R.stopping && (!live || (R.mr && R.mr.state === 'inactive'))) onInterrupted();
+  if (R.cap && R.cap.ctx.state !== 'running' && !R.interrupted) { try { R.cap.ctx.resume(); } catch {} }
+  if (!R.interrupted && !R.stopping && !live) onInterrupted();
 });
 window.addEventListener('beforeunload', e => { if (R) { e.preventDefault(); e.returnValue = ''; } });
 async function requestPersist(){ try { navigator.storage && navigator.storage.persist && await navigator.storage.persist(); } catch {} }
@@ -485,44 +529,44 @@ els.alarmResume.addEventListener('click', () => resumeAfterInterrupt());
 els.alarmStop.addEventListener('click', () => finish());
 
 /* ---------- setup check (silent: playback only if you tap play) ---------- */
-function listen(stream, onLevel){
+function listen(ctx, stream, onLevel){
   try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AC(); const an = ctx.createAnalyser(); an.fftSize = 1024;
+    const an = ctx.createAnalyser(); an.fftSize = 1024;
     ctx.createMediaStreamSource(stream).connect(an);
-    const buf = new Float32Array(an.fftSize); let raf = 0;
-    const tick = () => {
+    const buf = new Float32Array(an.fftSize);
+    const id = setInterval(() => {
       an.getFloatTimeDomainData(buf);
       let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       onLevel(20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-8));
-      raf = requestAnimationFrame(tick);
-    };
-    ctx.resume && ctx.resume(); tick();
-    return () => { cancelAnimationFrame(raf); ctx.close && ctx.close(); };
+    }, 30);
+    return () => clearInterval(id);
   } catch { return () => {}; }
 }
 async function runCheck(){
   if (R) return;
+  const ctx = newContext();
   const btn = els.checkBtn; btn.disabled = true;
   els.checks.hidden = true; els.checkAudio.hidden = true;
   let stream;
   try { stream = await getStream(); }
-  catch (e) { showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings.' : `Could not open the microphone (${e.name}).`); btn.disabled = false; return; }
+  catch (e) { try { ctx.close(); } catch {} showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings.' : `Could not open the microphone (${e.name}).`); btn.disabled = false; return; }
   btn.textContent = 'Listening… say a few words from where you will sit';
-  const levels = [];
-  const stopListen = listen(stream, db => levels.push(db));
-  const mime = pickMime(); const chunks = [];
-  let mr; try { mr = new MediaRecorder(stream, mime ? {mimeType: mime} : undefined); } catch { mr = null; }
-  if (mr) { mr.ondataavailable = e => e.data.size && chunks.push(e.data); mr.start(); }
+  const levels = []; const pcms = []; let got = 0;
+  let cap = null;
+  try { cap = await openCapture(ctx, stream, ({pcm}) => { if (pcm.length) { pcms.push(pcm); got += pcm.length; } }); } catch (e) { showError('Audio capture failed: ' + e.message); }
+  const stopListen = listen(ctx, stream, db => levels.push(db));
   await new Promise(r => setTimeout(r, 5000));
-  if (mr) await new Promise(r => { mr.onstop = r; mr.stop(); });
-  stream.getTracks().forEach(t => t.stop()); stopListen();
+  stopListen();
+  if (cap) { await cap.flush(); cap.close(); } else { try { ctx.close(); } catch {} }
+  stream.getTracks().forEach(t => t.stop());
+  const capturedSec = got / RATE;
 
   // speech level: use the loud end of the distribution, not a single click
   levels.sort((a, b) => a - b);
   const p90 = levels.length ? levels[Math.floor(levels.length * 0.9)] : -120;
   const max = levels.length ? levels[levels.length - 1] : -120;
   const results = [];
+  results.push(capturedSec >= 4.5 ? ['ok', `Captured ${capturedSec.toFixed(1)} s of audio`, 'Recording works on this phone.'] : ['bad', `Captured only ${capturedSec.toFixed(1)} of 5 s`, 'Audio capture is not working in this browser. Tell Claude what phone and browser you are using.']);
   if (p90 > -42) results.push(['ok', 'Microphone level good', `Speech peaks around ${Math.round(p90)} dBFS.`]);
   else if (p90 > -55) results.push(['warn', 'Microphone level low', `Speech peaks around ${Math.round(p90)} dBFS. Move the phone toward the middle of the table, away from laptops and vents.`]);
   else if (max > -40) results.push(['warn', 'Heard only a brief sound', 'Run the check again and keep talking for the full 5 seconds.']);
@@ -555,9 +599,10 @@ async function runCheck(){
     tx.append(b, d); li.append(m, tx); els.checks.append(li);
   }
   els.checks.hidden = false;
-  if (chunks.length) {
+  if (pcms.length) {
     if (els.checkAudio.src) URL.revokeObjectURL(els.checkAudio.src);
-    els.checkAudio.src = URL.createObjectURL(new Blob(chunks, {type: (mime || 'audio/webm').split(';')[0]}));
+    const bytes = pcms.reduce((n, a) => n + a.byteLength, 0);
+    els.checkAudio.src = URL.createObjectURL(new Blob([wavHeader(bytes), ...pcms], {type: 'audio/wav'}));
     els.checkAudio.hidden = false; // tap play to hear it; nothing plays on its own
   }
   btn.textContent = 'Check setup again'; btn.disabled = false;
@@ -586,7 +631,9 @@ async function buildFiles(m){
   const files = [];
   const parts = [...new Set(chunks.map(c => c.part))];
   for (const p of parts) {
-    const blob = new Blob(chunks.filter(c => c.part === p).map(c => c.blob), {type});
+    const pieces = chunks.filter(c => c.part === p).map(c => c.blob);
+    if (m.format === 'pcm16') pieces.unshift(wavHeader(pieces.reduce((n, b) => n + b.size, 0)));
+    const blob = new Blob(pieces, {type});
     const name = parts.length > 1 ? `${base}_part${p}.${m.ext}` : `${base}.${m.ext}`;
     files.push(new File([blob], name, {type}));
   }
@@ -657,7 +704,7 @@ function mkBtn(text, kind){ const b = document.createElement('button'); b.classN
 async function showStorage(){
   try {
     const e = await navigator.storage.estimate();
-    els.storage.textContent = `Using ${mb(e.usage || 0)} of phone storage for recordings. Speech at 64 kbps is about 29 MB per hour.`;
+    els.storage.textContent = `Using ${mb(e.usage || 0)} of phone storage for recordings. Audio is saved as 16 kHz WAV, about 115 MB per hour.`;
   } catch { els.storage.textContent = ''; }
 }
 function showError(msg){ els.support.textContent = msg; els.support.hidden = false; }
@@ -669,7 +716,7 @@ function showOffline(){
 /* ---------- boot ---------- */
 async function boot(){
   if (!window.isSecureContext) { showError('Open this page over https (or localhost). Browsers only allow the microphone on secure pages.'); els.start.disabled = true; els.checkBtn.disabled = true; }
-  if (!('MediaRecorder' in window) || !navigator.mediaDevices) { showError('This browser cannot record audio. Use Safari on iPhone (iOS 14.5+) or Chrome on Android.'); els.start.disabled = true; els.checkBtn.disabled = true; }
+  if (!navigator.mediaDevices || !(window.AudioContext || window.webkitAudioContext) || !('AudioWorkletNode' in window)) { showError('This browser cannot record audio. Use Safari on iPhone (iOS 14.5 or later) or Chrome on Android.'); els.start.disabled = true; els.checkBtn.disabled = true; }
   if ('serviceWorker' in navigator && window.isSecureContext) {
     navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(showOffline).catch(() => {});
     navigator.serviceWorker.addEventListener('controllerchange', showOffline);
