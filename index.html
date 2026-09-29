@@ -67,6 +67,7 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .live .lbl{display:none}
 .item-actions{display:flex;flex-wrap:wrap;gap:8px}
 .item-actions .btn.small{min-width:72px}
+.item-actions .push-right{margin-left:auto}
 .danger-row{display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--line);padding-top:12px;flex-wrap:wrap}
 .toggle{flex-direction:row;align-items:flex-start;gap:10px;color:var(--ink);font-size:15px;cursor:pointer}
 .toggle input{width:20px;height:20px;margin:2px 0 0;accent-color:var(--accent);flex:none}
@@ -250,7 +251,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.9';
+const VERSION = 'v1.9.1';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -863,10 +864,11 @@ async function renderList(){
       clearTimeout(armed); await deleteMeeting(m.id); renderList(); showStorage();
     };
     row.className = 'item-actions';
-    row.append(bShare); if (bCont) row.append(bCont); row.append(bInfo);
+    bDel.classList.add('push-right');
+    row.append(bShare); if (bCont) row.append(bCont); row.append(bInfo, bDel);
     const extra = document.createElement('div'); extra.className = 'danger-row';
     const left = document.createElement('div'); left.className = 'row'; left.append(bPlay, bSave);
-    extra.append(left, bDel);
+    extra.append(left);
     li.append(row, details);
     details._extra = [extra, player];
     els.list.append(li);
