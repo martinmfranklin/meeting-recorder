@@ -59,7 +59,15 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .btn.danger{color:var(--danger)}
 .btn.small{font-size:13px;padding:6px 10px;min-height:36px}
 .btn.wide{width:100%}
-.stack{display:flex;flex-direction:column;gap:10px}
+.stack{display:flex;flex-direction:column;gap:12px}
+.subrow{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px}
+.linkbtn{background:none;border:0;padding:6px 0;font:inherit;font-size:14px;font-weight:500;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.linkbtn:disabled{color:var(--muted);text-decoration:none}
+#title:disabled{background:transparent;border-color:transparent;padding:0;color:var(--ink);font-weight:600;font-size:18px;-webkit-text-fill-color:var(--ink);opacity:1}
+.live .lbl{display:none}
+.item-actions{display:flex;flex-wrap:wrap;gap:8px}
+.item-actions .btn.small{min-width:72px}
+.danger-row{display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--line);padding-top:12px;flex-wrap:wrap}
 .toggle{flex-direction:row;align-items:flex-start;gap:10px;color:var(--ink);font-size:15px;cursor:pointer}
 .toggle input{width:20px;height:20px;margin:2px 0 0;accent-color:var(--accent);flex:none}
 .toggle small{display:block;font-size:13px;color:var(--muted)}
@@ -77,7 +85,7 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .markers{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .markers li{display:grid;grid-template-columns:14px 1fr;gap:6px;align-items:start}
 .markers li::before{content:'•';color:var(--muted);font-size:18px;line-height:36px;text-align:center}
-.markers textarea{min-height:36px;height:auto;resize:vertical;font-size:15px;padding:6px 8px;background:var(--panel);border-color:transparent}
+.markers textarea{min-height:36px;height:auto;resize:none;overflow:hidden;font-size:15px;padding:6px 8px;background:var(--panel);border-color:transparent}
 .markers textarea:focus{border-color:var(--line)}
 .part-note{font-size:12px;color:var(--faint);margin:0}
 .markers-empty{color:var(--faint);font-size:14px;margin:0}
@@ -113,6 +121,16 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .row{display:flex;flex-wrap:wrap;gap:8px}
 audio{width:100%;height:40px}
 .empty{color:var(--muted);font-size:14px;margin:0}
+.details{display:flex;flex-direction:column;gap:12px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.details input[type=text],.details textarea{background:var(--panel)}
+.facts{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:13px;margin:0}
+.facts dt{color:var(--muted)} .facts dd{margin:0;overflow-wrap:anywhere}
+.dnotes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.dnotes li{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start}
+.dnotes time{font:500 12px var(--f-mono);font-variant-numeric:tabular-nums;color:var(--muted);padding-top:9px;min-width:62px}
+.dnotes textarea{min-height:36px;font-size:15px;padding:6px 8px;resize:none;overflow:hidden}
+.dhead{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0}
+.saved{font-size:12px;color:var(--faint);min-height:1em;margin:0}
 footer{font-size:12px;color:var(--muted);text-align:center;display:flex;flex-direction:column;gap:2px}
 details summary{cursor:pointer;font-size:13px;color:var(--muted)}
 details[open] summary{margin-bottom:10px}
@@ -147,32 +165,32 @@ details[open] summary{margin-bottom:10px}
 
   <section class="panel" aria-labelledby="meet-h">
     <h2 id="meet-h">Meeting</h2>
-    <label for="title">Title
+    <label for="title"><span class="lbl">Title</span>
       <input type="text" id="title" autocomplete="off" placeholder="Client, topic">
     </label>
     <details id="att-box">
-      <summary>Attendees (optional, saved with the notes file)</summary>
+      <summary>Attendees</summary>
       <label for="attendees">One per line: Name, Role, Company
         <textarea id="attendees" placeholder="Jane Doe, Plant Manager, Client Co.&#10;John Smith, Engineer, Partner Inc."></textarea>
       </label>
     </details>
-  </section>
 
-  <section class="panel" id="idle-view" aria-label="Start">
-    <div class="seg" id="source-seg" role="radiogroup" aria-label="What to record" hidden>
-      <button class="seg-b" role="radio" aria-checked="true" data-src="mic">In the room<small>microphone</small></button>
-      <button class="seg-b" role="radio" aria-checked="false" data-src="call">Call<small>Teams, Zoom, Meet + mic</small></button>
-    </div>
-    <p class="hint" id="call-hint" hidden>After you tap Start, choose <b>Entire screen</b> in the share window and switch on <b>Share system audio</b>. Use a headset so the other side is not recorded twice.</p>
-    <label class="toggle" for="boost"><input type="checkbox" id="boost" checked> <span><b>Auto level</b><small>Filters rumble and adjusts itself during the meeting so quiet and distant speakers come through. Recommended for a phone on a table.</small></span></label>
-    <div class="stack">
+    <div id="idle-view" class="stack">
+      <div class="seg" id="source-seg" role="radiogroup" aria-label="What to record" hidden>
+        <button class="seg-b" role="radio" aria-checked="true" data-src="mic">In the room<small>microphone</small></button>
+        <button class="seg-b" role="radio" aria-checked="false" data-src="call">Call<small>Teams, Zoom, Meet + mic</small></button>
+      </div>
+      <p class="hint" id="call-hint" hidden>After Start, pick <b>Entire screen</b> and switch on <b>Share system audio</b>. Use a headset.</p>
+      <label class="toggle" for="boost"><input type="checkbox" id="boost" checked> <span><b>Auto level</b><small>Evens out quiet and distant voices.</small></span></label>
       <button class="btn primary wide" id="start">Start recording</button>
-      <button class="btn wide" id="check-btn">Check setup (5 seconds)</button>
+      <div class="subrow">
+        <button class="linkbtn" id="check-btn">Check setup</button>
+        <span class="hint" id="hint-phone">Keep the screen on. Use Dark to black it out.</span>
+        <span class="hint" id="hint-desk" hidden>You can switch windows; keep this tab open.</span>
+      </div>
+      <ul class="checks" id="checks" hidden></ul>
+      <audio id="check-audio" controls hidden></audio>
     </div>
-    <ul class="checks" id="checks" hidden></ul>
-    <audio id="check-audio" controls hidden></audio>
-    <p class="hint" id="hint-phone">Once started, the page shows only your notes and a small dot at the bottom. The app makes no sounds. Keep the screen on; on iPhone, locking it or switching apps stops the microphone. Use Dark to black out the screen.</p>
-    <p class="hint" id="hint-desk" hidden>Once started, the page shows only your notes and a small dot at the bottom. The app makes no sounds. You can switch to other windows; keep this tab open until you tap End.</p>
   </section>
 
   <section class="panel" id="live-view" aria-labelledby="notes-h" hidden>
@@ -192,7 +210,7 @@ details[open] summary{margin-bottom:10px}
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v1.7</span></footer>
+  <footer><span id="storage"></span><span id="offline">v1.9</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -232,7 +250,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.7';
+const VERSION = 'v1.9';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -275,7 +293,7 @@ function deleteMeeting(id){
 const pad = n => String(n).padStart(2, '0');
 function hms(ms){ const s = Math.floor(ms / 1000); return `${pad(Math.floor(s/3600))}:${pad(Math.floor(s/60)%60)}:${pad(s%60)}`; }
 function mb(bytes){ return bytes < 1e6 ? `${Math.round(bytes/1e3)} KB` : bytes < 1e9 ? `${(bytes/1e6).toFixed(1)} MB` : `${(bytes/1e9).toFixed(1)} GB`; }
-function slug(t){ return (t || 'meeting').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'meeting'; }
+function slug(t){ return (t || 'meeting').replace(/[^\w\- ]+/g, ' ').trim().replace(/[\s-]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'meeting'; }
 function stamp(d){ d = new Date(d); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; }
 function uid(){ return (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)); }
 function defaultTitle(){ const d = new Date(); return `Meeting ${d.toLocaleDateString(undefined,{month:'short',day:'numeric'})} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
@@ -426,6 +444,7 @@ function captureError(e){
 }
 
 function showLive(on){
+  document.body.classList.toggle('live', on);
   els.idle.hidden = on; els.live.hidden = !on; els.dock.hidden = !on; els.listPanel.hidden = on;
   els.title.disabled = on;
   if (on) els.attBox.open = false;
@@ -601,7 +620,7 @@ function renderMarkers(){
     const inp = document.createElement('textarea'); inp.id = 'mk' + i; inp.rows = 1; inp.value = mk.note;
     inp.setAttribute('aria-label', 'Note');
     inp.addEventListener('input', () => { mk.note = inp.value; clearTimeout(markerSave); markerSave = setTimeout(() => R && saveMeeting(R.meeting), 600); });
-    li.append(inp); els.markers.append(li);
+    li.append(inp); els.markers.append(li); requestAnimationFrame(() => fit(inp));
   });
 }
 els.noteAdd.addEventListener('click', addNote);
@@ -677,7 +696,7 @@ async function runCheck(){
   let stream;
   try { stream = await getStream(); }
   catch (e) { try { ctx.close(); } catch {} showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings.' : `Could not open the microphone (${e.name}).`); btn.disabled = false; return; }
-  btn.textContent = 'Listening… say a few words from where you will sit';
+  btn.textContent = 'Listening for 5 s… speak normally';
   const levels = []; const pcms = []; let got = 0;
   let cap = null;
   try { cap = await openCapture(ctx, [{stream, boost}], ({pcm}) => { if (pcm.length) { pcms.push(pcm); got += pcm.length; } }, lastGain()); } catch (e) { showError('Audio capture failed: ' + e.message); }
@@ -735,12 +754,12 @@ async function runCheck(){
     els.checkAudio.src = URL.createObjectURL(new Blob([wavHeader(bytes), ...pcms], {type: 'audio/wav'}));
     els.checkAudio.hidden = false; // tap play to hear it; nothing plays on its own
   }
-  btn.textContent = 'Check setup again'; btn.disabled = false;
+  btn.textContent = 'Check again'; btn.disabled = false;
 }
 
 /* ---------- export ---------- */
 function notesText(m, partsCount){
-  const mk = m.markers || [];
+  const mk = (m.markers || []).filter(k => (k.note || '').trim());
   const merged = m.format === 'pcm16';
   const segs = (m.segments || []).filter(g => g.part > 1);
   const when = t => new Date(t).toLocaleString(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
@@ -757,7 +776,8 @@ function notesText(m, partsCount){
     segs.forEach(g => out.push(`- Part ${g.part} starts at ${hms(g.startMs)} (${when(g.at)}${g.reason ? ', ' + g.reason : ''})`));
   }
   const label = k => (k.type && k.type !== 'note') ? `[${TYPES[k.type]}] ` : '';
-  out.push('', 'Notes (time in the audio):', mk.length ? mk.map(k => `- [${hms(k.t)}] ${label(k)}${k.note || '(empty)'}`).join('\n') : '- (none)');
+  const stampOf = k => Number.isFinite(k.t) ? hms(k.t) : 'after meeting';
+  out.push('', 'Notes (time in the audio):', mk.length ? mk.map(k => `- [${stampOf(k)}] ${label(k)}${k.note}`).join('\n') : '- (none)');
   return out.filter(l => l !== null).join('\n') + '\n';
 }
 async function buildFiles(m){
@@ -814,7 +834,7 @@ async function renderList(){
     meta.textContent = `${hms(m.durationMs)} · ${mb(m.bytes)}`;
     head.append(title, meta);
     const sub = document.createElement('div'); sub.className = 'sub';
-    const nMk = (m.markers || []).length;
+    const nMk = (m.markers || []).filter(k => (k.note || '').trim()).length;
     sub.textContent = new Date(m.createdAt).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
       + (nMk ? ` · ${nMk} note${nMk > 1 ? 's' : ''}` : '')
       + (m.parts > 1 ? ` · recorded in ${m.parts} parts` : '');
@@ -823,6 +843,9 @@ async function renderList(){
     const row = document.createElement('div'); row.className = 'row';
     const bPlay = mkBtn('Play'), bShare = mkBtn('Share', 'primary'), bSave = mkBtn('Save file'), bDel = mkBtn('Delete', 'danger');
     const bCont = m.format === 'pcm16' ? mkBtn('Continue') : null;
+    const bInfo = mkBtn('Details');
+    const details = document.createElement('div'); details.className = 'details'; details.hidden = true;
+    bInfo.onclick = () => { if (details.hidden) { m.markers = (m.markers || []).filter(k => (k.note || '').trim()); renderDetails(m, details, title); details.hidden = false; bInfo.textContent = 'Hide details'; } else { details.hidden = true; bInfo.textContent = 'Details'; renderList(); } };
     if (bCont) bCont.onclick = () => { if (!R) startMeeting(m); };
     const player = document.createElement('div'); player.className = 'row';
     bPlay.onclick = async () => {
@@ -839,11 +862,68 @@ async function renderList(){
       if (!armed) { armed = setTimeout(() => { armed = 0; bDel.textContent = 'Delete'; }, 3000); bDel.textContent = 'Tap again to delete'; return; }
       clearTimeout(armed); await deleteMeeting(m.id); renderList(); showStorage();
     };
-    row.append(bPlay, bShare, bSave); if (bCont) row.append(bCont); row.append(bDel);
-    li.append(row, player);
+    row.className = 'item-actions';
+    row.append(bShare); if (bCont) row.append(bCont); row.append(bInfo);
+    const extra = document.createElement('div'); extra.className = 'danger-row';
+    const left = document.createElement('div'); left.className = 'row'; left.append(bPlay, bSave);
+    extra.append(left, bDel);
+    li.append(row, details);
+    details._extra = [extra, player];
     els.list.append(li);
   }
 }
+function renderDetails(m, box, titleEl){
+  box.innerHTML = '';
+  let t;
+  const status = box.appendChild(document.createElement('p')); status.className = 'saved';
+  const persist = () => { clearTimeout(t); status.textContent = ''; t = setTimeout(async () => { await saveMeeting(m); status.textContent = 'Saved'; }, 500); };
+  const field = (label, el) => { const l = document.createElement('label'); l.textContent = label; l.append(el); return l; };
+
+  const ti = document.createElement('input'); ti.type = 'text'; ti.value = m.title; ti.id = 'd-title-' + m.id;
+  ti.addEventListener('input', () => { m.title = ti.value.trim() || m.title; titleEl.textContent = m.title; persist(); });
+  const at = document.createElement('textarea'); at.value = m.attendees || ''; at.id = 'd-att-' + m.id; at.placeholder = 'Name, Role, Company (one per line)';
+  at.addEventListener('input', () => { m.attendees = at.value; persist(); });
+
+  const facts = document.createElement('dl'); facts.className = 'facts';
+  const when = x => new Date(x).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+  const rows = [['Recorded', when(m.createdAt)], ['Length', hms(m.durationMs)], ['Source', m.source === 'call' ? 'Call audio + microphone' : 'Microphone (in the room)']];
+  if (m.boost) rows.push(['Auto level', Number.isFinite(m.agcLo) ? `On, ${m.agcLo.toFixed(0)} to ${m.agcHi.toFixed(0)} dB` : 'On']);
+  const segs = (m.segments || []).filter(g => g.part > 1);
+  segs.forEach(g => rows.push([`Part ${g.part}`, `from ${hms(g.startMs)} in the audio, ${when(g.at)}${g.reason ? ', ' + g.reason : ''}`]));
+  for (const [k, v] of rows) { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; facts.append(dt, dd); }
+
+  const nh = document.createElement('p'); nh.className = 'dhead'; nh.textContent = 'Notes';
+  const list = document.createElement('ul'); list.className = 'dnotes';
+  const drawNotes = () => {
+    list.innerHTML = '';
+    m.markers = (m.markers || []);
+    const order = m.markers.map((k, i) => i).sort((a, b) => (Number.isFinite(m.markers[a].t) ? m.markers[a].t : Infinity) - (Number.isFinite(m.markers[b].t) ? m.markers[b].t : Infinity));
+    order.forEach(i => {
+      const k = m.markers[i];
+      const li = document.createElement('li');
+      const tm = document.createElement('time'); tm.textContent = Number.isFinite(k.t) ? hms(k.t) : 'after';
+      const ta = document.createElement('textarea'); ta.rows = 1; ta.value = k.note || ''; ta.id = `d-n-${m.id}-${i}`; ta.setAttribute('aria-label', 'Note');
+      ta.addEventListener('input', () => { k.note = ta.value; persist(); });
+      li.append(tm, ta); list.append(li); requestAnimationFrame(() => fit(ta));
+    });
+    if (!m.markers.length) { const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'No notes.'; list.append(li); }
+  };
+  drawNotes();
+  const comp = document.createElement('div'); comp.className = 'compose';
+  const ni = document.createElement('textarea'); ni.rows = 1; ni.placeholder = 'Add a note after the meeting'; ni.id = 'd-new-' + m.id; ni.setAttribute('aria-label', 'New note');
+  const nb = mkBtn('Add');
+  const add = () => { const v = ni.value.trim(); if (!v) return; m.markers.push({t: null, type: 'note', note: v}); ni.value = ''; drawNotes(); persist(); };
+  nb.onclick = add;
+  ni.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); add(); } });
+  comp.append(ni, nb);
+  const hint = document.createElement('p'); hint.className = 'hint'; hint.textContent = 'To delete a note, clear its text. Edits are included the next time you share or save the files.';
+
+  box.append(field('Title', ti), field('Attendees', at), facts, nh, list, comp, hint, status);
+  if (box._extra) box.append(...box._extra);
+}
+
+function fit(el){ el.style.height = 'auto'; el.style.height = el.scrollHeight + 2 + 'px'; }
+document.addEventListener('input', e => { if (e.target.matches('.markers textarea, .dnotes textarea')) fit(e.target); });
 function mkBtn(text, kind){ const b = document.createElement('button'); b.className = 'btn small' + (kind ? ' ' + kind : ''); b.textContent = text; return b; }
 
 async function showStorage(){
