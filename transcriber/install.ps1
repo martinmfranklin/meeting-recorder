@@ -22,6 +22,17 @@ $PyW = Join-Path $Venv 'Scripts\pythonw.exe'
 
 function Step($t) { Write-Host "`n== $t" -ForegroundColor Cyan }
 
+# pip's Windows certificate check (truststore) crashes on some PCs with "access violation";
+# if a pip call fails, retry it once with the older certificate handling.
+function Pip([string[]]$PipArgs) {
+    $ErrorActionPreference = 'Continue'   # pip writes warnings to stderr; do not treat them as fatal
+    & $Py -m pip @PipArgs --disable-pip-version-check 2>&1 | Out-Host
+    if ($LASTEXITCODE -eq 0) { return $true }
+    Write-Host 'pip failed; retrying with legacy certificate handling...' -ForegroundColor Yellow
+    & $Py -m pip @PipArgs --disable-pip-version-check --use-deprecated=legacy-certs 2>&1 | Out-Host
+    return ($LASTEXITCODE -eq 0)
+}
+
 function Find-Python {
     foreach ($v in '3.12', '3.11', '3.10') {
         try { $p = (& py "-$v" -c "import sys;print(sys.executable)" 2>$null); if ($LASTEXITCODE -eq 0 -and $p) { return $p.Trim() } } catch {}
@@ -56,16 +67,14 @@ Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" 
 
 Step 'Creating environment'
 if (-not (Test-Path $Py)) { & $Sys -m venv $Venv; if ($LASTEXITCODE) { throw 'Could not create the Python environment.' } }
-& $Py -m pip install --upgrade pip --quiet --disable-pip-version-check
-& $Py -m pip install --upgrade --quiet --disable-pip-version-check faster-whisper sherpa-onnx
-if ($LASTEXITCODE) { throw 'Package install failed.' }
+Pip @('install', '--upgrade', 'pip', '--quiet') | Out-Null
+if (-not (Pip @('install', '--upgrade', '--progress-bar', 'off', 'faster-whisper', 'sherpa-onnx'))) { throw 'Package install failed (see the pip messages above).' }
 
 $HasNvidia = $false
 try { if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { nvidia-smi -L | Out-Null; $HasNvidia = ($LASTEXITCODE -eq 0) } } catch {}
 if ($HasNvidia) {
     Step 'NVIDIA GPU found: installing GPU libraries (about 1 GB)'
-    & $Py -m pip install --upgrade --quiet --disable-pip-version-check nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
-    if ($LASTEXITCODE) { Write-Warning 'GPU libraries failed to install; the transcriber will use the CPU.' }
+    if (-not (Pip @('install', '--upgrade', '--progress-bar', 'off', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12==9.*'))) { Write-Warning 'GPU libraries failed to install; the transcriber will use the CPU.' }
 } else {
     Write-Host 'No NVIDIA GPU found: transcription will run on the CPU.'
 }
