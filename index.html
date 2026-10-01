@@ -249,7 +249,7 @@ details[open] summary{margin-bottom:10px}
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v2.1</span></footer>
+  <footer><span id="storage"></span><span id="offline">v2.2</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -289,7 +289,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v2.1';
+const VERSION = 'v2.2';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -432,6 +432,47 @@ function wavHeader(dataBytes){
   h.setUint32(24, RATE, true); h.setUint32(28, RATE * 2, true); h.setUint16(32, 2, true); h.setUint16(34, 16, true);
   w(36, 'data'); h.setUint32(40, dataBytes, true);
   return h.buffer;
+}
+
+/* Field Notes metadata travels inside the WAV as an extra RIFF chunk ("fnmd", JSON) after the audio.
+   Audio players and Whisper ignore unknown chunks; Field Notes and the transcriber read it back. */
+function metaOf(m){
+  return {format: 'field-notes-meta/1', title: m.title, attendees: m.attendees || '', createdAt: m.createdAt, durationMs: m.durationMs,
+          source: m.source, boost: !!m.boost, agcLo: m.agcLo, agcHi: m.agcHi, segments: m.segments || [],
+          markers: (m.markers || []).filter(k => (k.note || '').trim())};
+}
+function wavWithMeta(pieces, meta){
+  const dataBytes = pieces.reduce((n, b) => n + b.size, 0);
+  let js = new TextEncoder().encode(JSON.stringify(meta));
+  const pad = js.length % 2;
+  const tail = new Uint8Array(8 + js.length + pad);
+  const dv = new DataView(tail.buffer);
+  'fnmd'.split('').forEach((c, i) => dv.setUint8(i, c.charCodeAt(0)));
+  dv.setUint32(4, js.length, true); tail.set(js, 8);
+  const head = wavHeader(dataBytes);
+  new DataView(head).setUint32(4, 36 + dataBytes + tail.length, true);
+  return [head, ...pieces, tail];
+}
+async function readWavMeta(blob){
+  try {
+    const rd = async (o, n) => new DataView(await blob.slice(o, o + n).arrayBuffer());
+    const h = await rd(0, 12);
+    const tag = dvs => String.fromCharCode(...[0, 1, 2, 3].map(i => dvs.getUint8(i)));
+    if (tag(h) !== 'RIFF') return null;
+    let off = 12;
+    for (let i = 0; i < 32 && off + 8 <= blob.size; i++) {
+      const c = await rd(off, 8); const id = tag(c), len = c.getUint32(4, true);
+      if (id === 'fnmd') return JSON.parse(new TextDecoder().decode(await blob.slice(off + 8, off + 8 + len).arrayBuffer()));
+      off += 8 + len + (len % 2);
+    }
+  } catch {}
+  return null;
+}
+function parsedFromMeta(meta){
+  if (!meta) return null;
+  return {title: meta.title || '', attendees: (meta.attendees || '').split('\n').map(s => s.trim()).filter(Boolean),
+          markers: meta.markers || [], date: meta.createdAt || null, segments: meta.segments || [],
+          source: meta.source, boost: meta.boost, agcLo: meta.agcLo, agcHi: meta.agcHi};
 }
 
 /* ---------- recorder state ---------- */
@@ -826,9 +867,7 @@ async function buildFiles(m){
   const files = [];
   const parts = [...new Set(chunks.map(c => c.part))];
   if (m.format === 'pcm16') {
-    const pieces = chunks.map(c => c.blob);
-    pieces.unshift(wavHeader(pieces.reduce((n, b) => n + b.size, 0)));
-    files.push(new File([new Blob(pieces, {type})], `${base}.${m.ext}`, {type}));
+    files.push(new File(wavWithMeta(chunks.map(c => c.blob), metaOf(m)), `${base}.${m.ext}`, {type}));
     files.push(new File([notesText(m, parts.length)], `${base}_notes.txt`, {type: 'text/plain'}));
     if (m.transcript) files.push(new File([transcriptText(m)], `${base}_transcript.txt`, {type: 'text/plain'}));
     return files;
@@ -858,6 +897,17 @@ async function share(m, btn){
   save(files, btn);
 }
 async function saveFiles(m, btn){ save(await buildFiles(m), btn); }
+// One file (WAV with title, attendees and notes inside) for the laptop's OneDrive inbox
+async function sendOne(m, btn){
+  const f = mediaFile(await buildFiles(m));
+  let first = false; try { first = !localStorage.getItem('fn-sent'); } catch {}
+  if (first) flashInbox('Choose Save to Files → OneDrive → Field Notes Inbox. Your phone remembers the folder next time.');
+  if (navigator.canShare && navigator.canShare({files: [f]})) {
+    try { await navigator.share({files: [f], title: m.title}); m.sentAt = Date.now(); await saveMeeting(m); try { localStorage.setItem('fn-sent', '1'); } catch {} btn.textContent = 'Sent'; setTimeout(() => btn.textContent = 'Send to OneDrive', 2500); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  save([f], btn);
+}
 function save(files, btn){
   files.forEach((f, i) => setTimeout(() => {
     const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name;
@@ -868,7 +918,7 @@ function save(files, btn){
 
 /* ---------- transcription via the Field Notes Transcriber helper on this computer ---------- */
 const HELPER = 'http://127.0.0.1:8787';
-const HELPER_LATEST = '1.1.0'; // bump when transcriber/ changes; older helpers show an update notice
+const HELPER_LATEST = '1.2.0'; // bump when transcriber/ changes; older helpers show an update notice
 const verLt = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
 const isDesktop = matchMedia('(pointer:fine)').matches;
 const MEET = new Map();          // id -> meeting object currently shown in the list
@@ -940,6 +990,7 @@ async function cancelTranscription(m){
 }
 function badgeText(m){
   const t = m.tx || {};
+  if (!isDesktop && m.sentAt && !m.transcript) return 'Sent to OneDrive ' + new Date(m.sentAt).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
   if (['queued', 'running', 'uploading'].includes(t.status)) return `Transcribing ${Math.round((t.progress || 0) * 100)}%`;
   if (m.transcript) return 'Transcript ready';
   return '';
@@ -1051,7 +1102,7 @@ async function renderTx(m, box){
   }
 
   if (t.status === 'error' || t.status === 'cancelled') msg(t.status === 'cancelled' ? 'Transcription cancelled.' : t.error || 'Transcription failed.').classList.add('warn-text');
-  if (!isDesktop) { msg('To transcribe: Share this recording → Save to Files → OneDrive → Field Notes Inbox (save both files). Your laptop picks it up, transcribes it, and it appears in Field Notes there.'); return; }
+  if (!isDesktop) { msg('To transcribe: tap Send to OneDrive and save it to OneDrive → Field Notes Inbox. Title, attendees and notes travel inside the file. Your laptop picks it up, transcribes it, and it appears in Field Notes there.'); return; }
   const h = await checkHelper();
   if (!h.ok) {
     msg('To transcribe here, start Field Notes Transcriber on this computer. It runs locally; audio never leaves the computer.');
@@ -1113,7 +1164,9 @@ async function importOne(f, parsed, extra = {}){
     id: uid(), title: (parsed && parsed.title) || base.replace(/^\d{4}-\d\d-\d\d_\d{4}_/, '').replace(/[-_]+/g, ' ').trim() || 'Imported recording',
     attendees: parsed ? parsed.attendees.join('\n') : '', createdAt: (parsed && parsed.date) || f.lastModified || Date.now(),
     durationMs: await mediaDuration(f), format: 'import', mime: f.type || 'application/octet-stream', ext,
-    parts: 1, bytes: f.size, status: 'done', markers: parsed ? parsed.markers : [], source: 'import', fileName: f.name, segments: [],
+    parts: 1, bytes: f.size, status: 'done', markers: parsed ? parsed.markers : [], source: 'import', fileName: f.name,
+    segments: (parsed && parsed.segments) || [], recordedWith: parsed && parsed.source, boost: parsed ? !!parsed.boost : undefined,
+    agcLo: parsed ? parsed.agcLo : undefined, agcHi: parsed ? parsed.agcHi : undefined,
     ...extra
   };
   await saveMeeting(m);
@@ -1128,7 +1181,7 @@ async function importFiles(fileList){
   for (const f of media) {
     const base = f.name.replace(/\.[^.]+$/, '');
     const nt = texts.find(t => t.name.replace(/_notes\.txt$/i, '') === base) || (media.length === 1 && texts.length === 1 ? texts[0] : null);
-    await importOne(f, nt ? parseNotesTxt(await nt.text()) : null);
+    await importOne(f, nt ? parseNotesTxt(await nt.text()) : parsedFromMeta(await readWavMeta(f)));
   }
   renderList(); showStorage();
 }
@@ -1154,6 +1207,7 @@ async function syncInbox(){
       const f = new File([blob], it.name, {type: blob.type || '', lastModified: Math.round(it.mtime * 1000)});
       let parsed = null;
       if (it.has_notes) { try { parsed = parseNotesTxt(await (await fetch(`${HELPER}/inbox/${it.id}/notes`, {cache: 'no-store'})).text()); } catch {} }
+      if (!parsed) parsed = parsedFromMeta(await readWavMeta(f));
       const extra = {origin: it.kind === 'teams' ? 'onedrive-teams' : 'onedrive-inbox'};
       if (it.job) extra.tx = {status: 'queued', jobId: it.job, stage: 'Queued', progress: 0, at: Date.now()};
       const m = await importOne(f, parsed, extra);
@@ -1221,6 +1275,7 @@ async function renderList(){
     if (m.status !== 'done') { const t = document.createElement('div'); t.className = 'tag'; t.textContent = m.status === 'recovered' ? 'Recovered after the app closed mid-recording' : 'Ended by interruption'; li.append(t); }
     const row = document.createElement('div'); row.className = 'row';
     const bPlay = mkBtn('Play'), bShare = mkBtn('Share', 'primary'), bSave = mkBtn('Save file'), bDel = mkBtn('Delete', 'danger');
+    let extraShare = null;
     const bCont = m.format === 'pcm16' ? mkBtn('Continue') : null;
     const bInfo = mkBtn('Details');
     const details = document.createElement('div'); details.className = 'details'; details.hidden = true;
@@ -1243,9 +1298,15 @@ async function renderList(){
     };
     row.className = 'item-actions';
     bDel.classList.add('push-right');
-    row.append(bShare); if (bCont) row.append(bCont); row.append(bInfo, bDel);
+    if (!isDesktop && m.format === 'pcm16') {
+      const bSend = mkBtn('Send to OneDrive', 'primary');
+      bSend.onclick = () => sendOne(m, bSend);
+      bShare.classList.remove('primary');
+      row.append(bSend); if (bCont) row.append(bCont); row.append(bInfo, bDel);
+      extraShare = bShare;
+    } else { row.append(bShare); if (bCont) row.append(bCont); row.append(bInfo, bDel); }
     const extra = document.createElement('div'); extra.className = 'danger-row';
-    const left = document.createElement('div'); left.className = 'row'; left.append(bPlay, bSave);
+    const left = document.createElement('div'); left.className = 'row'; left.append(bPlay); if (extraShare) left.append(extraShare); left.append(bSave);
     extra.append(left);
     li.append(row, details);
     details._extra = [extra, player];

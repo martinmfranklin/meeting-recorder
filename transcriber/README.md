@@ -32,7 +32,7 @@ The first time, Chrome may ask whether Field Notes can access apps on this devic
 
 The transcriber watches **`OneDrive\Field Notes Inbox`** (created automatically). Anything saved there is transcribed on this computer as soon as it has synced, then appears in Field Notes on this computer by itself, with its transcript. The originals move to `Field Notes Inbox\Imported`.
 
-- **From the phone:** in Field Notes, Share a recording → **Save to Files** → OneDrive → **Field Notes Inbox**. Save both the audio and the `_notes.txt` so title, attendees and notes come along. (Needs the OneDrive app on the phone. An hour of audio is about 115 MB, so prefer Wi-Fi.)
+- **From the phone:** tap **Send to OneDrive** on the recording, then **Save to Files** → OneDrive → **Field Notes Inbox**. It is one WAV file with the title, attendees and notes inside it. The phone remembers the folder after the first time. (Needs the OneDrive app on the phone. An hour of audio is about 115 MB, so prefer Wi-Fi.)
 - **Teams recordings:** in Field Notes, click **OneDrive inbox: on** and tick **Also pick up Teams recordings**. New files in `OneDrive\Recordings` (where Teams saves meetings you record) are picked up; recordings already there are skipped, and Teams files are never moved.
 - Field Notes collects new items whenever it is open on this computer (every 20 seconds and when you switch back to it). Transcription itself runs even if Field Notes is closed.
 - To turn the inbox off, start the helper with `--no-inbox`.

@@ -32,7 +32,7 @@ import inbox as inbox_mod
 import mimetypes
 import os
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 DEFAULT_ORIGINS = [r"https://martinmfranklin\.github\.io", r"http://localhost(:\d+)?", r"http://127\.0\.0\.1(:\d+)?"]
 
 

@@ -22,6 +22,28 @@ INBOX_NAME = "Field Notes Inbox"
 STABLE_SECONDS = 15
 
 
+def read_wav_meta(path: Path):
+    """Field Notes WAVs carry title, attendees and notes in an extra RIFF chunk 'fnmd' (JSON)."""
+    try:
+        with open(path, "rb") as f:
+            if f.read(4) != b"RIFF":
+                return None
+            f.read(4)
+            if f.read(4) != b"WAVE":
+                return None
+            for _ in range(32):
+                h = f.read(8)
+                if len(h) < 8:
+                    return None
+                cid, n = h[:4], int.from_bytes(h[4:], "little")
+                if cid == b"fnmd":
+                    return json.loads(f.read(n).decode("utf-8"))
+                f.seek(n + (n % 2), 1)
+    except Exception:
+        return None
+    return None
+
+
 def find_onedrive() -> Path | None:
     for var in ("OneDriveCommercial", "OneDrive", "OneDriveConsumer"):
         p = os.environ.get(var)
@@ -159,6 +181,11 @@ class Inbox:
     @staticmethod
     def _title_attendees(p: Path, notes: Path | None):
         title, att = p.stem, []
+        meta = read_wav_meta(p) if p.suffix.lower() == ".wav" else None
+        if meta and not notes:
+            title = (meta.get("title") or "").strip() or title
+            att = [a.strip() for a in (meta.get("attendees") or "").splitlines() if a.strip()]
+            return title, att
         if notes:
             try:
                 lines = notes.read_text(encoding="utf-8", errors="replace").splitlines()
