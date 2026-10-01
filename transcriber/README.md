@@ -28,6 +28,15 @@ Check it is running: open <http://127.0.0.1:8787> in a browser.
 
 The first time, Chrome may ask whether Field Notes can access apps on this device. Choose **Allow**; that is how the page reaches the helper.
 
+## OneDrive inbox (phone recordings and Teams)
+
+The transcriber watches **`OneDrive\Field Notes Inbox`** (created automatically). Anything saved there is transcribed on this computer as soon as it has synced, then appears in Field Notes on this computer by itself, with its transcript. The originals move to `Field Notes Inbox\Imported`.
+
+- **From the phone:** in Field Notes, Share a recording → **Save to Files** → OneDrive → **Field Notes Inbox**. Save both the audio and the `_notes.txt` so title, attendees and notes come along. (Needs the OneDrive app on the phone. An hour of audio is about 115 MB, so prefer Wi-Fi.)
+- **Teams recordings:** in Field Notes, click **OneDrive inbox: on** and tick **Also pick up Teams recordings**. New files in `OneDrive\Recordings` (where Teams saves meetings you record) are picked up; recordings already there are skipped, and Teams files are never moved.
+- Field Notes collects new items whenever it is open on this computer (every 20 seconds and when you switch back to it). Transcription itself runs even if Field Notes is closed.
+- To turn the inbox off, start the helper with `--no-inbox`.
+
 ## Speed
 
 Roughly, for one hour of audio: a few minutes with an NVIDIA GPU, 20 to 40 minutes on a laptop CPU. You can close the Details panel or switch windows; the transcript appears when it is done. Jobs are queued one at a time.

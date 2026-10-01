@@ -28,8 +28,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import engine
+import inbox as inbox_mod
+import mimetypes
+import os
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 DEFAULT_ORIGINS = [r"https://martinmfranklin\.github\.io", r"http://localhost(:\d+)?", r"http://127\.0\.0\.1(:\d+)?"]
 
 
@@ -50,6 +53,16 @@ class State:
         self.jobs_dir = engine.app_dir() / "jobs"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._load_saved_jobs()
+        self.inbox = None if args.no_inbox else inbox_mod.Inbox(self.submit_path, log=lambda m: print(m, flush=True))
+
+    def submit_path(self, path, title, attendees, keep_file=False, num_speakers=0, filename=None):
+        jid = uuid.uuid4().hex[:12]
+        job = {"id": jid, "status": "queued", "stage": "Queued", "progress": 0.0, "created": time.time(),
+               "title": title or "", "attendees": attendees or [], "num_speakers": num_speakers,
+               "filename": filename or Path(path).name, "bytes": Path(path).stat().st_size, "_path": str(path), "_keep": keep_file}
+        self.jobs[jid] = job
+        self.queue.put(jid)
+        return jid
 
     # -- persistence: finished jobs survive a restart so the app can still collect them
     def _load_saved_jobs(self):
@@ -123,10 +136,11 @@ class State:
                 traceback.print_exc()
                 job.update(status="error", error=str(e) or e.__class__.__name__)
             finally:
-                try:
-                    Path(job["_path"]).unlink(missing_ok=True)
-                except Exception:
-                    pass
+                if not job.get("_keep"):
+                    try:
+                        Path(job["_path"]).unlink(missing_ok=True)
+                    except Exception:
+                        pass
                 self.save(job)
 
 
@@ -194,14 +208,61 @@ def make_handler(st: State):
                     ahead = [x for x in st.jobs.values() if x.get("status") in ("queued", "running") and x["created"] < j["created"]]
                     out["ahead"] = len(ahead)
                 return self._json(200, out)
+            if path == "/inbox":
+                if not st.inbox:
+                    return self._json(200, {"enabled": False, "folders": [], "items": []})
+                items = []
+                for it in st.inbox.pending():
+                    j = st.jobs.get(it.get("job") or "")
+                    items.append({k: it[k] for k in ("id", "name", "size", "mtime", "kind", "title", "job")} |
+                                 {"has_notes": bool(it.get("notes_path")), "job_status": j["status"] if j else None})
+                return self._json(200, {"enabled": st.inbox.cfg.get("enabled"), "auto_transcribe": st.inbox.cfg.get("auto_transcribe"),
+                                        "watch_teams": st.inbox.cfg.get("watch_teams"), "folders": st.inbox.folders(), "items": items})
+            m = re.fullmatch(r"/inbox/(\w+)/(file|notes)", path)
+            if m and st.inbox:
+                it = st.inbox.get(m.group(1))
+                fp = it and (it["path"] if m.group(2) == "file" else it.get("notes_path"))
+                if not fp or not Path(fp).exists():
+                    return self._json(404, {"error": "not found"})
+                return self._file(fp)
             if path == "/":
                 return self._page()
             self._json(404, {"error": "not found"})
 
+        def _file(self, fp):
+            size = os.path.getsize(fp)
+            ctype = mimetypes.guess_type(fp)[0] or "application/octet-stream"
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(size))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with open(fp, "rb") as f:
+                while True:
+                    b = f.read(1 << 20)
+                    if not b:
+                        break
+                    self.wfile.write(b)
+
         def do_POST(self):
             if self._reject_foreign():
                 return
-            if urllib.parse.urlparse(self.path).path != "/jobs":
+            path = urllib.parse.urlparse(self.path).path
+            if path.startswith("/inbox") and st.inbox:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(n) if n else b""
+                if path == "/inbox/config":
+                    try:
+                        st.inbox.set_config(**json.loads(body or b"{}"))
+                    except Exception as e:
+                        return self._json(400, {"error": str(e)})
+                    return self._json(200, {"ok": True, "folders": st.inbox.folders(), "watch_teams": st.inbox.cfg.get("watch_teams")})
+                m = re.fullmatch(r"/inbox/(\w+)/imported", path)
+                if m:
+                    return self._json(200 if st.inbox.mark_imported(m.group(1)) else 404, {"ok": True})
+                return self._json(404, {"error": "not found"})
+            if path != "/jobs":
                 return self._json(404, {"error": "not found"})
             if self.headers.get("Origin") and self.headers.get("X-FN-Client") != "field-notes":
                 return self._json(403, {"error": "missing client header"})
@@ -265,6 +326,7 @@ def make_handler(st: State):
 <h1>Field Notes Transcriber</h1><p>Status: <b>{st.status}</b> &middot; {st.detail}</p>
 <p>Model {getattr(st.asr, 'model_name', st.args.model)} on {getattr(st.asr, 'device', '...')} &middot; version {VERSION}</p>
 <p>Start transcriptions from Field Notes (Details &rarr; Transcribe). Audio stays on this computer.</p>
+<p>Watching: {'; '.join(f"{f['path']}{'' if f['kind']=='inbox' or f.get('on') else ' (off)'}" for f in (st.inbox.folders() if st.inbox else [])) or 'nothing'}</p>
 <table><tr><th>When</th><th>Recording</th><th>Status</th><th></th></tr>{rows}</table>"""
             body = html.encode()
             self.send_response(200)
@@ -292,6 +354,7 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--allow-origin", action="append", help="regex of an extra allowed web origin")
     ap.add_argument("--prefetch", action="store_true", help="download and load models, then exit")
+    ap.add_argument("--no-inbox", action="store_true", help="do not watch the OneDrive inbox")
     ap.add_argument("--test-asr", help=argparse.SUPPRESS)  # sherpa whisper model dir, for testing only
     args = ap.parse_args()
     st = State(args)
@@ -300,6 +363,8 @@ def main():
         raise SystemExit(0 if st.status == "ready" else 1)
     threading.Thread(target=st.load_models, daemon=True).start()
     threading.Thread(target=st.worker, daemon=True).start()
+    if st.inbox:
+        threading.Thread(target=st.inbox.run, daemon=True).start()
     try:
         srv = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(st))
     except OSError:

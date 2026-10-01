@@ -123,7 +123,11 @@ body.live #title:focus{background:var(--panel);border-color:var(--line);padding:
 body.live .new-card{background:var(--panel);border-color:var(--line)}
 body.live .new-card h2{color:var(--muted)}
 .saved-list{display:flex;flex-direction:column;gap:10px;margin-top:8px}
-.list-head{display:flex;justify-content:space-between;align-items:baseline;padding-inline:4px}
+.list-head{display:flex;justify-content:space-between;align-items:baseline;padding-inline:4px;gap:12px;flex-wrap:wrap}
+.list-tools{display:flex;gap:16px}
+.inbox-panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.inbox-panel .path{font:12px var(--f-mono);overflow-wrap:anywhere;color:var(--ink)}
+.ok-notice{background:var(--ok-soft);color:var(--ok)}
 .badge{font-size:12px;font-weight:600;color:var(--accent)}
 .tx{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding-block:12px}
 .tx-start{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -238,12 +242,14 @@ details[open] summary{margin-bottom:10px}
   </section>
 
   <section class="saved-list" id="list-panel" aria-labelledby="list-h">
-    <div class="list-head"><h2 id="list-h">Saved recordings</h2><button class="linkbtn" id="import-btn">Import file</button></div>
+    <div class="list-head"><h2 id="list-h">Saved recordings</h2><span class="list-tools"><button class="linkbtn" id="inbox-btn" hidden>OneDrive inbox</button><button class="linkbtn" id="import-btn">Import file</button></span></div>
+    <p class="notice ok-notice" id="inbox-flash" hidden></p>
+    <div class="inbox-panel" id="inbox-panel" hidden></div>
     <input type="file" id="import-in" multiple accept="audio/*,video/*,.wav,.m4a,.mp3,.mp4,.webm,.ogg,.mov,.txt" hidden>
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v2.0</span></footer>
+  <footer><span id="storage"></span><span id="offline">v2.1</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -283,7 +289,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v2.0';
+const VERSION = 'v2.1';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -862,7 +868,7 @@ function save(files, btn){
 
 /* ---------- transcription via the Field Notes Transcriber helper on this computer ---------- */
 const HELPER = 'http://127.0.0.1:8787';
-const HELPER_LATEST = '1.0.0'; // bump when transcriber/ changes; older helpers show an update notice
+const HELPER_LATEST = '1.1.0'; // bump when transcriber/ changes; older helpers show an update notice
 const verLt = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
 const isDesktop = matchMedia('(pointer:fine)').matches;
 const MEET = new Map();          // id -> meeting object currently shown in the list
@@ -915,6 +921,7 @@ async function pollJob(id){
       catch { if (++misses > 5) { m.tx.stage = 'Waiting for the transcriber (is it running?)'; refreshTx(m); await new Promise(r => setTimeout(r, 10000)); } else await new Promise(r => setTimeout(r, 2000)); continue; }
       if (j.status === 'done') {
         m.transcript = j.result; m.speakerNames = m.speakerNames || {};
+        if (!m.durationMs && j.result && j.result.duration) { m.durationMs = j.result.duration * 1000; }
         m.tx = {status: 'done', jobId: m.tx.jobId, at: Date.now()};
         await saveMeeting(m); refreshTx(m); updateCardBadge(m);
         fetch(`${HELPER}/jobs/${j.id}`, {method: 'DELETE'}).catch(() => {});
@@ -1044,7 +1051,7 @@ async function renderTx(m, box){
   }
 
   if (t.status === 'error' || t.status === 'cancelled') msg(t.status === 'cancelled' ? 'Transcription cancelled.' : t.error || 'Transcription failed.').classList.add('warn-text');
-  if (!isDesktop) { msg('Transcribe on your laptop: Share this recording (audio and notes) to it, then use Import in Field Notes there.'); return; }
+  if (!isDesktop) { msg('To transcribe: Share this recording → Save to Files → OneDrive → Field Notes Inbox (save both files). Your laptop picks it up, transcribes it, and it appears in Field Notes there.'); return; }
   const h = await checkHelper();
   if (!h.ok) {
     msg('To transcribe here, start Field Notes Transcriber on this computer. It runs locally; audio never leaves the computer.');
@@ -1099,6 +1106,20 @@ function mediaDuration(file){
     setTimeout(() => fin(0), 8000); el.src = url;
   });
 }
+async function importOne(f, parsed, extra = {}){
+  const base = f.name.replace(/\.[^.]+$/, '');
+  const ext = (f.name.match(/\.([^.]+)$/) || [, 'bin'])[1].toLowerCase();
+  const m = {
+    id: uid(), title: (parsed && parsed.title) || base.replace(/^\d{4}-\d\d-\d\d_\d{4}_/, '').replace(/[-_]+/g, ' ').trim() || 'Imported recording',
+    attendees: parsed ? parsed.attendees.join('\n') : '', createdAt: (parsed && parsed.date) || f.lastModified || Date.now(),
+    durationMs: await mediaDuration(f), format: 'import', mime: f.type || 'application/octet-stream', ext,
+    parts: 1, bytes: f.size, status: 'done', markers: parsed ? parsed.markers : [], source: 'import', fileName: f.name, segments: [],
+    ...extra
+  };
+  await saveMeeting(m);
+  await addChunk({meetingId: m.id, part: 1, seq: 0, blob: f});
+  return m;
+}
 async function importFiles(fileList){
   const files = [...fileList];
   const texts = files.filter(f => /\.txt$/i.test(f.name));
@@ -1107,18 +1128,72 @@ async function importFiles(fileList){
   for (const f of media) {
     const base = f.name.replace(/\.[^.]+$/, '');
     const nt = texts.find(t => t.name.replace(/_notes\.txt$/i, '') === base) || (media.length === 1 && texts.length === 1 ? texts[0] : null);
-    const parsed = nt ? parseNotesTxt(await nt.text()) : null;
-    const ext = (f.name.match(/\.([^.]+)$/) || [, 'bin'])[1].toLowerCase();
-    const m = {
-      id: uid(), title: (parsed && parsed.title) || base.replace(/^\d{4}-\d\d-\d\d_\d{4}_/, '').replace(/[-_]+/g, ' ').trim() || 'Imported recording',
-      attendees: parsed ? parsed.attendees.join('\n') : '', createdAt: (parsed && parsed.date) || f.lastModified || Date.now(),
-      durationMs: await mediaDuration(f), format: 'import', mime: f.type || 'application/octet-stream', ext,
-      parts: 1, bytes: f.size, status: 'done', markers: parsed ? parsed.markers : [], source: 'import', fileName: f.name, segments: []
-    };
-    await saveMeeting(m);
-    await addChunk({meetingId: m.id, part: 1, seq: 0, blob: f});
+    await importOne(f, nt ? parseNotesTxt(await nt.text()) : null);
   }
   renderList(); showStorage();
+}
+
+/* ---------- OneDrive inbox (via the transcriber on this computer) ---------- */
+const INBOX_BUSY = new Set();
+let inboxInfo = null, inboxTimer = null;
+async function syncInbox(){
+  if (!isDesktop || R) return;
+  const h = await checkHelper();
+  if (!h.ok || verLt(h.info.version || '0', '1.1.0')) { inboxInfo = null; drawInboxStatus(); return; }
+  let d;
+  try { d = await (await fetch(HELPER + '/inbox', {cache: 'no-store'})).json(); } catch { return; }
+  inboxInfo = d; drawInboxStatus();
+  let added = 0;
+  for (const it of d.items || []) {
+    if (INBOX_BUSY.has(it.id)) continue;
+    INBOX_BUSY.add(it.id);
+    try {
+      const r = await fetch(`${HELPER}/inbox/${it.id}/file`, {cache: 'no-store'});
+      if (!r.ok) continue;
+      const blob = await r.blob();
+      const f = new File([blob], it.name, {type: blob.type || '', lastModified: Math.round(it.mtime * 1000)});
+      let parsed = null;
+      if (it.has_notes) { try { parsed = parseNotesTxt(await (await fetch(`${HELPER}/inbox/${it.id}/notes`, {cache: 'no-store'})).text()); } catch {} }
+      const extra = {origin: it.kind === 'teams' ? 'onedrive-teams' : 'onedrive-inbox'};
+      if (it.job) extra.tx = {status: 'queued', jobId: it.job, stage: 'Queued', progress: 0, at: Date.now()};
+      const m = await importOne(f, parsed, extra);
+      await fetch(`${HELPER}/inbox/${it.id}/imported`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+      added++;
+      if (m.tx) pollJob(m.id);
+    } catch (e) { console.warn('inbox import failed', e); }
+    finally { INBOX_BUSY.delete(it.id); }
+  }
+  if (added) { await renderList(); showStorage(); flashInbox(`Added ${added} recording${added > 1 ? 's' : ''} from OneDrive`); }
+}
+function flashInbox(t){ const el = $('#inbox-flash'); el.textContent = t; el.hidden = false; clearTimeout(el._t); el._t = setTimeout(() => el.hidden = true, 6000); }
+function drawInboxStatus(){
+  const btn = $('#inbox-btn');
+  btn.hidden = !inboxInfo;
+  if (!inboxInfo) { $('#inbox-panel').hidden = true; return; }
+  const fol = inboxInfo.folders || [];
+  const inbox = fol.find(f => f.kind === 'inbox'), teams = fol.find(f => f.kind === 'teams');
+  btn.textContent = inbox ? 'OneDrive inbox: on' : 'OneDrive: not found';
+  const p = $('#inbox-panel'); p.innerHTML = '';
+  const add = (tag, txt, cls) => { const e = document.createElement(tag); if (txt) e.textContent = txt; if (cls) e.className = cls; p.append(e); return e; };
+  if (!inbox) { add('p', 'OneDrive was not found on this computer. Sign in to OneDrive, then this turns on by itself.', 'hint'); return; }
+  add('p', 'Recordings saved to this OneDrive folder are transcribed on this computer and added here automatically:', 'hint');
+  add('code', inbox.path, 'path');
+  add('p', 'From your phone: Share a recording → Save to Files → OneDrive → Field Notes Inbox. Save both the audio and the _notes.txt.', 'hint');
+  if (teams) {
+    const lab = document.createElement('label'); lab.className = 'toggle'; lab.htmlFor = 'teams-watch';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.id = 'teams-watch'; cb.checked = !!inboxInfo.watch_teams; cb.disabled = !teams.exists;
+    const sp = document.createElement('span'); sp.innerHTML = '<b>Also pick up Teams recordings</b><small></small>';
+    sp.querySelector('small').textContent = teams.exists ? `New recordings in ${teams.path} (meetings you record). Existing ones are skipped.` : `No Teams recordings folder yet (${teams.path}).`;
+    cb.onchange = async () => { try { await fetch(HELPER + '/inbox/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({watch_teams: cb.checked})}); inboxInfo.watch_teams = cb.checked; } catch { cb.checked = !cb.checked; } };
+    lab.append(cb, sp); p.append(lab);
+  }
+}
+function startInbox(){
+  if (!isDesktop) return;
+  syncInbox();
+  clearInterval(inboxTimer);
+  inboxTimer = setInterval(() => { if (document.visibilityState === 'visible') syncInbox(); }, 20000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncInbox(); });
 }
 
 /* ---------- list ---------- */
@@ -1191,7 +1266,7 @@ function renderDetails(m, box, titleEl){
 
   const facts = document.createElement('dl'); facts.className = 'facts';
   const when = x => new Date(x).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
-  const rows = [['Recorded', when(m.createdAt)], ['Length', hms(m.durationMs)], ['Source', m.source === 'call' ? 'Call audio + microphone' : m.source === 'import' ? `Imported: ${m.fileName || 'file'}` : 'Microphone (in the room)']];
+  const rows = [['Recorded', when(m.createdAt)], ['Length', hms(m.durationMs)], ['Source', m.source === 'call' ? 'Call audio + microphone' : m.source === 'import' ? `${m.origin === 'onedrive-teams' ? 'Teams recording via OneDrive' : m.origin === 'onedrive-inbox' ? 'OneDrive inbox' : 'Imported'}: ${m.fileName || 'file'}` : 'Microphone (in the room)']];
   if (m.boost) rows.push(['Auto level', Number.isFinite(m.agcLo) ? `On, ${m.agcLo.toFixed(0)} to ${m.agcHi.toFixed(0)} dB` : 'On']);
   const segs = (m.segments || []).filter(g => g.part > 1);
   segs.forEach(g => rows.push([`Part ${g.part}`, `from ${hms(g.startMs)} in the audio, ${when(g.at)}${g.reason ? ', ' + g.reason : ''}`]));
@@ -1259,8 +1334,10 @@ async function boot(){
   await renderList(); showStorage(); showOffline();
   // pick up transcriptions that were running when the app was closed
   if (isDesktop) for (const m of await allMeetings()) if (m.tx && ['queued', 'running'].includes(m.tx.status)) pollJob(m.id);
+  startInbox();
 }
 $('#import-btn').addEventListener('click', () => $('#import-in').click());
+$('#inbox-btn').addEventListener('click', () => { const p = $('#inbox-panel'); p.hidden = !p.hidden; });
 $('#import-in').addEventListener('change', e => { importFiles(e.target.files).finally(() => { e.target.value = ''; }); });
 els.start.addEventListener('click', () => startMeeting());
 // title and attendees can be edited while recording; save as you type

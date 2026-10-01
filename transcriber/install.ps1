@@ -70,7 +70,7 @@ if ($HasNvidia) {
 }
 
 Step 'Downloading transcriber'
-foreach ($f in 'engine.py', 'server.py', 'uninstall.ps1') {
+foreach ($f in 'engine.py', 'server.py', 'inbox.py', 'uninstall.ps1') {
     Invoke-WebRequest -UseBasicParsing -Uri "$Base/$f" -OutFile (Join-Path $Root $f)
 }
 
@@ -106,3 +106,5 @@ try {
 }
 Write-Host 'Open Field Notes in Chrome or Edge, open a recording''s Details and click Transcribe.'
 Write-Host 'If the browser asks to allow access to apps on this device, choose Allow.'
+$od = @($env:OneDriveCommercial, $env:OneDrive) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if ($od) { Write-Host "OneDrive inbox: $(Join-Path $od 'Field Notes Inbox') (recordings saved there are transcribed automatically)." }
