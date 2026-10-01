@@ -8,7 +8,10 @@ transcribes it with speaker labels and returns the result. Audio never leaves th
                           X-FN-Speakers (optional int), X-FN-Filename
   GET    /jobs/<id>       progress, then the transcript
   DELETE /jobs/<id>       cancel or remove
+  POST   /local/jobs      {"path": ..., "srt": bool} from programs on this computer (needs X-FN-Token, no browser Origin)
   GET    /                small status page
+
+Models load when there is work and unload after --idle-minutes (default 10) so the helper stays small when idle.
 
 Run:  python server.py [--model large-v3-turbo] [--device auto|cpu|cuda] [--port 8787]
 """
@@ -28,11 +31,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import engine
+import formats
+import secrets
 import inbox as inbox_mod
 import mimetypes
 import os
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 DEFAULT_ORIGINS = [r"https://martinmfranklin\.github\.io", r"http://localhost(:\d+)?", r"http://127\.0\.0\.1(:\d+)?"]
 
 
@@ -43,7 +48,9 @@ class Cancelled(Exception):
 class State:
     def __init__(self, args):
         self.args = args
-        self.status = "starting"      # starting | loading | ready | error
+        self.status = "idle"          # idle (models not in memory) | loading | ready | error
+        self.last_device = ""
+        self.last_used = time.time()
         self.detail = ""
         self.asr = None
         self.diarizer = None
@@ -53,13 +60,20 @@ class State:
         self.jobs_dir = engine.app_dir() / "jobs"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._load_saved_jobs()
-        self.inbox = None if args.no_inbox else inbox_mod.Inbox(self.submit_path, log=lambda m: print(m, flush=True))
+        self.inbox = None if args.no_inbox else inbox_mod.Inbox(self.submit_path, log=lambda m: print(m, flush=True),
+                                                                   job_active=lambda jid: bool(jid) and self.jobs.get(jid, {}).get("status") in ("queued", "running"))
+        tok = engine.app_dir() / "token.txt"
+        if not tok.exists():
+            tok.write_text(secrets.token_hex(16), encoding="utf-8")
+        self.token = tok.read_text(encoding="utf-8").strip()
 
-    def submit_path(self, path, title, attendees, keep_file=False, num_speakers=0, filename=None):
+    def submit_path(self, path, title, attendees, keep_file=False, num_speakers=0, filename=None, outputs=None):
         jid = uuid.uuid4().hex[:12]
         job = {"id": jid, "status": "queued", "stage": "Queued", "progress": 0.0, "created": time.time(),
                "title": title or "", "attendees": attendees or [], "num_speakers": num_speakers,
                "filename": filename or Path(path).name, "bytes": Path(path).stat().st_size, "_path": str(path), "_keep": keep_file}
+        if outputs:
+            job["_outputs"] = outputs
         self.jobs[jid] = job
         self.queue.put(jid)
         return jid
@@ -87,17 +101,74 @@ class State:
         self.detail = msg
         print(msg, flush=True)
 
+    # ---- model process: speech models live in a child process that is stopped when idle,
+    # so the helper drops back to a few tens of MB between jobs.
+    def _start_engine(self) -> bool:
+        import multiprocessing as mp
+        ctx = mp.get_context("spawn")
+        self.conn, child_end = ctx.Pipe()
+        self.child = ctx.Process(target=engine_process, args=(child_end, self.args.model, self.args.device, self.args.test_asr),
+                                 daemon=True)
+        self.child.start()
+        self.status = "loading"
+        while True:
+            if self.conn.poll(1):
+                m = self.conn.recv()
+                if m[0] == "log":
+                    self.log(m[1])
+                elif m[0] == "ready":
+                    self.status, self.last_device = "ready", m[1]
+                    self.log(f"Ready on {m[1]}")
+                    return True
+                elif m[0] == "fatal":
+                    self.status = "error"
+                    self.log(f"Could not load models: {m[1]}")
+                    return False
+            elif not self.child.is_alive():
+                self.status = "error"
+                self.log("The model process stopped while loading")
+                return False
+
+    def _engine_alive(self) -> bool:
+        return getattr(self, "child", None) is not None and self.child.is_alive()
+
+    def _stop_engine(self, why="Idle"):
+        if self._engine_alive():
+            try:
+                self.conn.send(("stop",))
+            except Exception:
+                pass
+            self.child.join(10)
+            if self.child.is_alive():
+                self.child.terminate()
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+        self.child = None
+        self.status = "idle"
+        self.log(f"{why}: speech model unloaded, memory freed")
+
+    def idle_watch(self):
+        limit = self.args.idle_minutes * 60
+        while limit > 0:
+            time.sleep(15)
+            busy = any(j.get("status") in ("queued", "running") for j in self.jobs.values())
+            if self.status == "ready" and not busy and time.time() - self.last_used > limit:
+                with self.lock:
+                    if not any(j.get("status") in ("queued", "running") for j in self.jobs.values()):
+                        self._stop_engine()
+
     def load_models(self):
+        """In-process load, used by --prefetch to download and verify the models."""
         try:
             self.status = "loading"
             self.log("Loading speaker model")
             self.diarizer = engine.Diarizer(log=self.log)
             self.log(f"Loading speech model {self.args.model} (first run downloads about 1.6 GB)")
-            if self.args.test_asr:
-                self.asr = engine.SherpaWhisperTestASR(self.args.test_asr)
-            else:
-                self.asr = engine.FasterWhisperASR(self.args.model, self.args.device, log=self.log)
-            self.status = "ready"
+            self.asr = (engine.SherpaWhisperTestASR(self.args.test_asr) if self.args.test_asr
+                        else engine.FasterWhisperASR(self.args.model, self.args.device, log=self.log))
+            self.status, self.last_device = "ready", self.asr.device
             self.log(f"Ready on {self.asr.device}")
         except Exception as e:
             self.status = "error"
@@ -110,38 +181,124 @@ class State:
             job = self.jobs.get(jid)
             if not job or job.get("status") != "queued":
                 continue
-            while self.status in ("starting", "loading"):
-                job.update(stage="Waiting for models to load", progress=0.0)
-                time.sleep(1)
-            if self.status != "ready":
-                job.update(status="error", error=f"Models are not available: {self.detail}")
-                self.save(job)
-                continue
+            with self.lock:
+                if not self._engine_alive():
+                    job.update(stage="Loading speech model", progress=0.0)
+                    if not self._start_engine():
+                        job.update(status="error", error=f"Models are not available: {self.detail}")
+                        self.save(job)
+                        continue
             job.update(status="running", started=time.time())
-
-            def progress(stage, frac):
-                if job.get("_cancel"):
-                    raise Cancelled()
-                job["stage"], job["progress"] = stage, round(float(frac), 4)
-
+            result = None
             try:
-                res = engine.run_job(engine.Job(path=job["_path"], title=job.get("title", ""),
-                                                attendees=job.get("attendees") or [],
-                                                num_speakers=job.get("num_speakers") or 0),
-                                     self.asr, self.diarizer, progress)
-                job.update(status="done", progress=1.0, stage="Done", result=res, finished=time.time())
-            except Cancelled:
-                job.update(status="cancelled", stage="Cancelled")
+                self.conn.send(("job", jid, job["_path"], job.get("title", ""), job.get("attendees") or [], job.get("num_speakers") or 0))
+                while True:
+                    if job.get("_cancel") and not job.get("_cancel_sent"):
+                        self.conn.send(("cancel", jid))
+                        job["_cancel_sent"] = time.time()
+                    if job.get("_cancel_sent") and time.time() - job["_cancel_sent"] > 5:
+                        # the model is busy inside a long step; stop the process (it restarts for the next job)
+                        self.child.terminate()
+                        self.child.join(5)
+                        self.child = None
+                        try:
+                            self.conn.close()
+                        except Exception:
+                            pass
+                        self.status = "idle"
+                        job.update(status="cancelled", stage="Cancelled")
+                        self.log("Cancelled; model process stopped")
+                        break
+                    if self.conn.poll(0.5):
+                        m = self.conn.recv()
+                        if m[0] == "progress":
+                            job["stage"], job["progress"] = m[2], round(m[3], 4)
+                        elif m[0] == "log":
+                            self.log(m[1])
+                        elif m[0] == "done":
+                            result = m[2]
+                            break
+                        elif m[0] == "cancelled":
+                            job.update(status="cancelled", stage="Cancelled")
+                            break
+                        elif m[0] == "error":
+                            job.update(status="error", error=m[2])
+                            break
+                    elif not self._engine_alive():
+                        job.update(status="error", error="The model process stopped unexpectedly (out of memory?).")
+                        self.status = "idle"
+                        break
+                if result is not None:
+                    job.update(status="done", progress=1.0, stage="Done", result=result, finished=time.time())
+                    out = job.get("_outputs")
+                    if out:
+                        try:
+                            job["outputs"] = formats.write_outputs(result, Path(out.get("source") or job["_path"]), Path(out["dir"]),
+                                                                   out.get("meta"), bool(out.get("srt")), bool(out.get("overwrite")))
+                            print("Wrote " + ", ".join(job["outputs"]), flush=True)
+                        except Exception as e:
+                            job["output_error"] = str(e)
+                            print(f"Could not write transcript files: {e}", flush=True)
             except Exception as e:
                 traceback.print_exc()
                 job.update(status="error", error=str(e) or e.__class__.__name__)
             finally:
+                self.last_used = time.time()
                 if not job.get("_keep"):
                     try:
                         Path(job["_path"]).unlink(missing_ok=True)
                     except Exception:
                         pass
                 self.save(job)
+
+
+class _ChildCancel(Exception):
+    pass
+
+
+def engine_process(conn, model, device, test_asr):
+    """Runs in its own process: loads the models once, transcribes jobs, exits on 'stop'."""
+    try:
+        _engine_loop(conn, model, device, test_asr)
+    except (EOFError, BrokenPipeError, ConnectionResetError, OSError, _ChildCancel):
+        pass  # the helper closed the connection (cancel, idle stop or shutdown): exit quietly
+
+
+def _engine_loop(conn, model, device, test_asr):
+    try:
+        log = lambda m: conn.send(("log", m))
+        dia = engine.Diarizer(log=log)
+        log(f"Loading speech model {model}")
+        asr = engine.SherpaWhisperTestASR(test_asr) if test_asr else engine.FasterWhisperASR(model, device, log=log)
+        conn.send(("ready", asr.device))
+    except Exception as e:
+        conn.send(("fatal", str(e)))
+        return
+    while True:
+        msg = conn.recv()
+        if msg[0] == "stop":
+            return
+        if msg[0] != "job":
+            continue
+        _, jid, path, title, att, ns = msg
+        state = {"cancel": False}
+
+        def progress(stage, frac):
+            while conn.poll():
+                m = conn.recv()
+                if m[0] == "cancel" and m[1] == jid:
+                    state["cancel"] = True
+            if state["cancel"]:
+                raise _ChildCancel()
+            conn.send(("progress", jid, stage, float(frac)))
+
+        try:
+            res = engine.run_job(engine.Job(path=path, title=title, attendees=att, num_speakers=ns), asr, dia, progress)
+            conn.send(("done", jid, res))
+        except _ChildCancel:
+            conn.send(("cancelled", jid))
+        except Exception as e:
+            conn.send(("error", jid, str(e) or e.__class__.__name__))
 
 
 def make_handler(st: State):
@@ -196,8 +353,9 @@ def make_handler(st: State):
             if path == "/health":
                 busy = sum(1 for j in st.jobs.values() if j.get("status") in ("queued", "running"))
                 return self._json(200, {"ok": True, "version": VERSION, "status": st.status, "detail": st.detail,
-                                        "model": getattr(st.asr, "model_name", st.args.model),
-                                        "device": getattr(st.asr, "device", ""), "busy": busy})
+                                        "model": getattr(st.asr, "model_name", None) or st.args.model,
+                                        "device": getattr(st.asr, "device", None) or st.last_device, "busy": busy,
+                                        "idle_minutes": st.args.idle_minutes})
             m = re.fullmatch(r"/jobs/([\w-]+)", path)
             if m:
                 j = st.jobs.get(m.group(1))
@@ -214,7 +372,7 @@ def make_handler(st: State):
                 items = []
                 for it in st.inbox.pending():
                     j = st.jobs.get(it.get("job") or "")
-                    items.append({k: it[k] for k in ("id", "name", "size", "mtime", "kind", "title", "job")} |
+                    items.append({k: it.get(k) for k in ("id", "name", "size", "mtime", "kind", "title", "job", "transcript_path")} |
                                  {"has_notes": bool(it.get("notes_path")), "job_status": j["status"] if j else None})
                 return self._json(200, {"enabled": st.inbox.cfg.get("enabled"), "auto_transcribe": st.inbox.cfg.get("auto_transcribe"),
                                         "watch_teams": st.inbox.cfg.get("watch_teams"), "folders": st.inbox.folders(), "items": items})
@@ -258,10 +416,30 @@ def make_handler(st: State):
                     except Exception as e:
                         return self._json(400, {"error": str(e)})
                     return self._json(200, {"ok": True, "folders": st.inbox.folders(), "watch_teams": st.inbox.cfg.get("watch_teams")})
+                m = re.fullmatch(r"/inbox/(\w+)/transcript", path)
+                if m:
+                    ok = st.inbox.write_transcript(m.group(1), body.decode("utf-8", errors="replace"))
+                    return self._json(200 if ok else 404, {"ok": ok})
                 m = re.fullmatch(r"/inbox/(\w+)/imported", path)
                 if m:
                     return self._json(200 if st.inbox.mark_imported(m.group(1)) else 404, {"ok": True})
                 return self._json(404, {"error": "not found"})
+            if path == "/local/jobs":
+                if self.headers.get("Origin") or not secrets.compare_digest(self.headers.get("X-FN-Token") or "", st.token):
+                    return self._json(403, {"error": "local programs only"})
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    req = json.loads(self.rfile.read(n) or b"{}")
+                    src = Path(req["path"])
+                    assert src.is_file()
+                except Exception:
+                    return self._json(400, {"error": "path must be an existing file"})
+                meta = formats.meta_for(src)
+                att = [a for a in (meta or {}).get("attendees", "").splitlines() if a.strip()]
+                jid = st.submit_path(str(src), (meta or {}).get("title") or src.stem, att, keep_file=True,
+                                     num_speakers=int(req.get("speakers") or 0),
+                                     outputs={"dir": req.get("out_dir") or str(src.parent), "srt": bool(req.get("srt")), "meta": meta})
+                return self._json(202, {"id": jid, "status": "queued"})
             if path != "/jobs":
                 return self._json(404, {"error": "not found"})
             if self.headers.get("Origin") and self.headers.get("X-FN-Client") != "field-notes":
@@ -324,7 +502,7 @@ def make_handler(st: State):
             html = f"""<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=5><title>Field Notes Transcriber</title>
 <style>body{{font:15px system-ui,sans-serif;max-width:640px;margin:32px auto;padding:0 16px;color:#18212b}}td,th{{padding:4px 10px;text-align:left;border-bottom:1px solid #ddd}}</style>
 <h1>Field Notes Transcriber</h1><p>Status: <b>{st.status}</b> &middot; {st.detail}</p>
-<p>Model {getattr(st.asr, 'model_name', st.args.model)} on {getattr(st.asr, 'device', '...')} &middot; version {VERSION}</p>
+<p>Model {st.args.model}{' on ' + st.last_device if st.last_device else ''} &middot; {'loaded' if st.status == 'ready' else 'loads when needed, unloads after ' + str(st.args.idle_minutes) + ' idle minutes'} &middot; version {VERSION}</p>
 <p>Start transcriptions from Field Notes (Details &rarr; Transcribe). Audio stays on this computer.</p>
 <p>Watching: {'; '.join(f"{f['path']}{'' if f['kind']=='inbox' or f.get('on') else ' (off)'}" for f in (st.inbox.folders() if st.inbox else [])) or 'nothing'}</p>
 <table><tr><th>When</th><th>Recording</th><th>Status</th><th></th></tr>{rows}</table>"""
@@ -355,13 +533,17 @@ def main():
     ap.add_argument("--allow-origin", action="append", help="regex of an extra allowed web origin")
     ap.add_argument("--prefetch", action="store_true", help="download and load models, then exit")
     ap.add_argument("--no-inbox", action="store_true", help="do not watch the OneDrive inbox")
+    ap.add_argument("--idle-minutes", type=float, default=10, help="unload models after this many idle minutes (0 = keep loaded)")
     ap.add_argument("--test-asr", help=argparse.SUPPRESS)  # sherpa whisper model dir, for testing only
     args = ap.parse_args()
     st = State(args)
     if args.prefetch:
         st.load_models()
         raise SystemExit(0 if st.status == "ready" else 1)
-    threading.Thread(target=st.load_models, daemon=True).start()
+    if args.idle_minutes <= 0:
+        threading.Thread(target=st._start_engine, daemon=True).start()
+    else:
+        threading.Thread(target=st.idle_watch, daemon=True).start()
     threading.Thread(target=st.worker, daemon=True).start()
     if st.inbox:
         threading.Thread(target=st.inbox.run, daemon=True).start()

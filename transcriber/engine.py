@@ -217,12 +217,19 @@ class Diarizer:
     def run(self, audio: np.ndarray, num_speakers: int = 0, progress: Optional[Progress] = None) -> list[dict]:
         sd = self._sherpa.OfflineSpeakerDiarization(self._cfg(num_speakers))
 
+        err = []
+
         def cb(done: int, total: int) -> int:
-            if progress and total:
-                progress("Identifying speakers", done / total)
+            if progress and total and not err:
+                try:
+                    progress("Identifying speakers", done / total)
+                except BaseException as ex:  # do not raise through native code
+                    err.append(ex)
             return 0
 
         result = sd.process(audio, callback=cb).sort_by_start_time()
+        if err:
+            raise err[0]
         return [{"start": r.start, "end": r.end, "speaker": int(r.speaker)} for r in result]
 
 

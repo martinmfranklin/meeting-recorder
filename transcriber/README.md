@@ -14,7 +14,7 @@ Open **PowerShell** (no admin needed) and run:
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/martinmfranklin/meeting-recorder/main/transcriber/install.ps1 | iex"
 ```
 
-It installs Python 3.12 for your user if needed, sets up its own environment in `%LOCALAPPDATA%\FieldNotesTranscriber`, downloads the models (about 1.7 GB, once), and starts the helper now and at every sign-in, hidden.
+It installs Python 3.12 for your user if needed, sets up its own environment in `%LOCALAPPDATA%\FieldNotesTranscriber`, downloads the models (about 1.7 GB, once), starts the helper now and at every sign-in (hidden), and adds **Send to > Transcribe (Field Notes)** to the right-click menu.
 
 Check it is running: open <http://127.0.0.1:8787> in a browser.
 
@@ -28,14 +28,30 @@ Check it is running: open <http://127.0.0.1:8787> in a browser.
 
 The first time, Chrome may ask whether Field Notes can access apps on this device. Choose **Allow**; that is how the page reaches the helper.
 
+## Right-click any file (no Field Notes needed)
+
+In File Explorer, select one or more audio or video files (Teams/Zoom/Meet MP4, voice memos, WAV...), right-click > **Send to** > **Transcribe (Field Notes)**. A small window shows progress; when done it writes, next to each file:
+
+- `name_transcript.txt`: speakers as Speaker 1, 2... with timestamps (and, for Field Notes recordings, the title, attendees and notes)
+- `name.srt`: subtitles, for video files
+
+The transcript opens when it is finished. Existing files are never overwritten (`name_transcript (2).txt`). To name the speakers, import the file into Field Notes instead.
+
+From a terminal: `"%LOCALAPPDATA%\FieldNotesTranscriber\venv\Scripts\python.exe" "%LOCALAPPDATA%\FieldNotesTranscriber\transcribe.py" file.mp4 [--speakers 3] [--srt]`
+
 ## OneDrive inbox (phone recordings and Teams)
 
 The transcriber watches **`OneDrive\Field Notes Inbox`** (created automatically). Anything saved there is transcribed on this computer as soon as it has synced, then appears in Field Notes on this computer by itself, with its transcript. The originals move to `Field Notes Inbox\Imported`.
 
 - **From the phone:** tap **Send to OneDrive** on the recording, then **Save to Files** → OneDrive → **Field Notes Inbox**. It is one WAV file with the title, attendees and notes inside it. The phone remembers the folder after the first time. (Needs the OneDrive app on the phone. An hour of audio is about 115 MB, so prefer Wi-Fi.)
 - **Teams recordings:** in Field Notes, click **OneDrive inbox: on** and tick **Also pick up Teams recordings**. New files in `OneDrive\Recordings` (where Teams saves meetings you record) are picked up; recordings already there are skipped, and Teams files are never moved.
+- Every inbox or Teams recording also gets a transcript in **`OneDrive\Field Notes Inbox\Transcripts`**, so you can read it anywhere OneDrive syncs, including your phone. When you name the speakers in Field Notes, that copy is updated with the names.
 - Field Notes collects new items whenever it is open on this computer (every 20 seconds and when you switch back to it). Transcription itself runs even if Field Notes is closed.
 - To turn the inbox off, start the helper with `--no-inbox`.
+
+## Resource use
+
+The background helper is small: about 40 MB of memory and no processor time while waiting. The speech model runs in a separate process that starts when there is work (about 10 to 30 seconds to load) and is stopped after 10 idle minutes, which returns its memory (roughly 1 to 1.5 GB on CPU, plus about 1.6 GB of graphics memory with an NVIDIA GPU). Change the idle time with `--idle-minutes N` on the Startup shortcut, or `--idle-minutes 0` to keep the model loaded.
 
 ## Speed
 

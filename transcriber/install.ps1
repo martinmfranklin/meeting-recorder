@@ -9,7 +9,8 @@
 #   2. Creates %LOCALAPPDATA%\FieldNotesTranscriber with its own Python environment
 #   3. Installs faster-whisper and sherpa-onnx (plus NVIDIA GPU libraries if an NVIDIA card is present)
 #   4. Downloads the speech and speaker models (about 1.7 GB, once)
-#   5. Starts the transcriber now and at every sign-in (hidden, no window)
+#   5. Starts the transcriber now and at every sign-in (hidden; the model loads only when there is work)
+#   6. Adds right-click > Send to > Transcribe (Field Notes) for any audio or video file
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -70,7 +71,7 @@ if ($HasNvidia) {
 }
 
 Step 'Downloading transcriber'
-foreach ($f in 'engine.py', 'server.py', 'inbox.py', 'uninstall.ps1') {
+foreach ($f in 'engine.py', 'server.py', 'inbox.py', 'formats.py', 'transcribe.py', 'uninstall.ps1') {
     Invoke-WebRequest -UseBasicParsing -Uri "$Base/$f" -OutFile (Join-Path $Root $f)
 }
 
@@ -95,6 +96,13 @@ foreach ($lnk in $targets) {
     $s.Description = 'Local transcription helper for Field Notes'
     $s.Save()
 }
+$st = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('SendTo')) 'Transcribe (Field Notes).lnk'))
+$st.TargetPath = $Py
+$st.Arguments = "`"$(Join-Path $Root 'transcribe.py')`" --pause"
+$st.WorkingDirectory = $Root
+$st.Description = 'Transcribe audio or video with speaker labels (on this computer)'
+$st.Save()
+
 Start-Process -FilePath $PyW -ArgumentList "`"$(Join-Path $Root 'server.py')`"" -WorkingDirectory $Root -WindowStyle Hidden
 
 Start-Sleep -Seconds 8
@@ -105,6 +113,7 @@ try {
     Write-Host "`nInstalled. The transcriber is still starting; check http://127.0.0.1:8787 in a minute." -ForegroundColor Yellow
 }
 Write-Host 'Open Field Notes in Chrome or Edge, open a recording''s Details and click Transcribe.'
+Write-Host 'Or right-click any audio or video file > Send to > Transcribe (Field Notes).'
 Write-Host 'If the browser asks to allow access to apps on this device, choose Allow.'
 $od = @($env:OneDriveCommercial, $env:OneDrive) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if ($od) { Write-Host "OneDrive inbox: $(Join-Path $od 'Field Notes Inbox') (recordings saved there are transcribed automatically)." }

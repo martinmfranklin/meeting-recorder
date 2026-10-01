@@ -54,9 +54,9 @@ def find_onedrive() -> Path | None:
 
 
 class Inbox:
-    def __init__(self, submit, log=print):
-        """submit(path, title, attendees, keep_file=True) -> job id"""
-        self.submit, self.log = submit, log
+    def __init__(self, submit, log=print, job_active=lambda jid: False):
+        """submit(path, title, attendees, keep_file=True, outputs=...) -> job id; job_active(jid) -> still queued/running"""
+        self.submit, self.log, self.job_active = submit, log, job_active
         self.cfg_path = engine.app_dir() / "inbox.json"
         self.state_path = engine.app_dir() / "inbox_state.json"
         self.lock = threading.Lock()
@@ -111,6 +111,46 @@ class Inbox:
                         base.append(str(p))
         self._save()
 
+    def transcripts_dir(self) -> Path | None:
+        inbox = next((Path(f["path"]) for f in self.folders() if f["kind"] == "inbox"), None)
+        return inbox / "Transcripts" if inbox else None
+
+    def write_transcript(self, iid, text: str) -> bool:
+        """Field Notes sends the transcript again after speakers are named; replace the OneDrive copy."""
+        it = self.state["items"].get(iid)
+        tp = it and it.get("transcript_path")
+        if not tp:
+            return False
+        p = Path(tp)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        return True
+
+    def _move_to_imported(self, it):
+        dest = Path(it["path"]).parent / "Imported"
+        try:
+            dest.mkdir(exist_ok=True)
+            for src in (it["path"], it.get("notes_path")):
+                if src and Path(src).exists():
+                    target = dest / Path(src).name
+                    if target.exists():
+                        target = dest / f"{Path(src).stem}_{int(time.time())}{Path(src).suffix}"
+                    shutil.move(src, target)
+            it.pop("move_pending", None)
+        except Exception as e:
+            self.log(f"Could not move {it['name']} to Imported yet: {e}")
+            it["move_pending"] = True
+
+    def _pending_moves(self):
+        with self.lock:
+            changed = False
+            for it in self.state["items"].values():
+                if it.get("move_pending") and not self.job_active(it.get("job")):
+                    self._move_to_imported(it)
+                    changed = True
+            if changed:
+                self._save()
+
     # ---- scanning
     @staticmethod
     def item_id(p: Path, st) -> str:
@@ -119,6 +159,7 @@ class Inbox:
     def scan(self):
         if not self.cfg.get("enabled"):
             return
+        self._pending_moves()
         now = time.time()
         for f in self.folders():
             if f["kind"] == "inbox" and not f["exists"]:
@@ -159,12 +200,19 @@ class Inbox:
                         continue
                     notes = self._notes_for(p)
                     title, attendees = self._title_attendees(p, notes)
+                    tdir = self.transcripts_dir()
                     item = {"id": iid, "path": key, "name": p.name, "size": st.st_size, "mtime": st.st_mtime,
                             "kind": f["kind"], "notes_path": str(notes) if notes else None, "status": "new",
-                            "found": now, "job": None, "title": title}
+                            "found": now, "job": None, "title": title,
+                            "transcript_path": str(tdir / f"{p.stem}_transcript.txt") if tdir else None}
                     if self.cfg.get("auto_transcribe"):
                         try:
-                            item["job"] = self.submit(key, title, attendees, keep_file=True)
+                            import formats
+                            meta = formats.meta_for(p)
+                            if notes and not meta:
+                                meta = formats.parse_notes_txt(notes.read_text(encoding="utf-8", errors="replace"))
+                            out = {"dir": str(tdir), "meta": meta, "overwrite": True, "source": key} if tdir else None
+                            item["job"] = self.submit(key, title, attendees, keep_file=True, outputs=out)
                         except Exception as e:
                             self.log(f"Could not queue {p.name}: {e}")
                     self.state["items"][iid] = item
@@ -221,17 +269,11 @@ class Inbox:
             it["status"] = "imported"
             it["imported"] = time.time()
             if it["kind"] == "inbox":
-                dest = Path(it["path"]).parent / "Imported"
-                try:
-                    dest.mkdir(exist_ok=True)
-                    for src in (it["path"], it.get("notes_path")):
-                        if src and Path(src).exists():
-                            target = dest / Path(src).name
-                            if target.exists():
-                                target = dest / f"{Path(src).stem}_{int(time.time())}{Path(src).suffix}"
-                            shutil.move(src, target)
-                except Exception as e:
-                    self.log(f"Could not move {it['name']} to Imported: {e}")
+                # never move a file the transcriber still has to read; the scan loop moves it afterwards
+                if self.job_active(it.get("job")):
+                    it["move_pending"] = True
+                else:
+                    self._move_to_imported(it)
             # forget old imported entries after 30 days
             cutoff = time.time() - 30 * 86400
             for k in [k for k, v in self.state["items"].items() if v["status"] == "imported" and v.get("imported", 0) < cutoff]:

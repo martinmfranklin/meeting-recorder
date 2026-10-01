@@ -7,6 +7,7 @@ Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" 
 foreach ($d in [Environment]::GetFolderPath('Startup'), [Environment]::GetFolderPath('Programs')) {
     Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $d 'Field Notes Transcriber.lnk')
 }
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path ([Environment]::GetFolderPath('SendTo')) 'Transcribe (Field Notes).lnk')
 $ans = Read-Host "Remove $Root (program, models and finished-job cache)? [y/N]"
 if ($ans -match '^[yY]') {
     Set-Location $env:TEMP
