@@ -1,0 +1,336 @@
+"""Field Notes Transcriber engine.
+
+Transcribes an audio or video file and labels who spoke when, entirely on this computer.
+
+  ASR:          faster-whisper (CTranslate2), default model large-v3-turbo, GPU if available
+  Speaker ID:   sherpa-onnx offline speaker diarization
+                (pyannote segmentation 3.0 + speaker embedding model, ONNX, no PyTorch)
+  Merge:        each recognised word is assigned to the speaker talking at that moment,
+                then consecutive words from the same speaker become one utterance.
+"""
+from __future__ import annotations
+
+import math
+import os
+import sys
+import tarfile
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+import numpy as np
+
+SR = 16000
+GH = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
+SEG_URL = f"{GH}/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+EMB_URL = f"{GH}/speaker-recongition-models/nemo_en_titanet_small.onnx"
+
+Progress = Callable[[str, float], None]  # (stage, fraction 0..1)
+
+
+def app_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(Path.home(), ".local", "share")
+    d = Path(base) / "FieldNotesTranscriber"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def models_dir() -> Path:
+    d = app_dir() / "models"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _download(url: str, dest: Path, log=print) -> None:
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    log(f"Downloading {url.rsplit('/', 1)[-1]} ...")
+    with urllib.request.urlopen(url) as r, open(tmp, "wb") as f:
+        while True:
+            b = r.read(1 << 20)
+            if not b:
+                break
+            f.write(b)
+    tmp.replace(dest)
+
+
+def ensure_diarization_models(log=print) -> tuple[Path, Path]:
+    md = models_dir()
+    seg_dir = md / "sherpa-onnx-pyannote-segmentation-3-0"
+    seg = seg_dir / "model.onnx"
+    if not seg.exists():
+        arc = md / "seg.tar.bz2"
+        _download(SEG_URL, arc, log)
+        with tarfile.open(arc) as t:
+            t.extractall(md)
+        arc.unlink(missing_ok=True)
+    emb = md / "nemo_en_titanet_small.onnx"
+    if not emb.exists():
+        _download(EMB_URL, emb, log)
+    return seg, emb
+
+
+def load_audio(path: str) -> np.ndarray:
+    """Decode any audio/video file to 16 kHz mono float32 (uses PyAV, bundled with faster-whisper)."""
+    from faster_whisper.audio import decode_audio
+    return decode_audio(path, sampling_rate=SR).astype(np.float32)
+
+
+# ---------------------------------------------------------------- speech recognition
+
+def _add_cuda_dll_dirs() -> None:
+    """On Windows, pip-installed NVIDIA libraries put their DLLs in site-packages/nvidia/*/bin."""
+    if os.name != "nt":
+        return
+    for p in sys.path:
+        nv = Path(p) / "nvidia"
+        if nv.is_dir():
+            for b in nv.glob("*/bin"):
+                try:
+                    os.add_dll_directory(str(b))
+                    os.environ["PATH"] = str(b) + os.pathsep + os.environ.get("PATH", "")
+                except OSError:
+                    pass
+
+
+class FasterWhisperASR:
+    def __init__(self, model: str = "large-v3-turbo", device: str = "auto", log=print):
+        _add_cuda_dll_dirs()
+        from faster_whisper import WhisperModel
+        import ctranslate2
+
+        self.model_name = model
+        want_gpu = device in ("auto", "cuda")
+        has_gpu = False
+        try:
+            has_gpu = ctranslate2.get_cuda_device_count() > 0
+        except Exception:
+            pass
+        self.model = None
+        if want_gpu and has_gpu:
+            try:
+                self.model = WhisperModel(model, device="cuda", compute_type="float16",
+                                          download_root=str(models_dir() / "whisper"))
+                self.device = "GPU"
+            except Exception as e:  # missing cuDNN/cuBLAS etc.
+                log(f"GPU not usable ({e}); using CPU")
+        if self.model is None:
+            threads = max(1, (os.cpu_count() or 4) - 1)
+            self.model = WhisperModel(model, device="cpu", compute_type="int8", cpu_threads=threads,
+                                      download_root=str(models_dir() / "whisper"))
+            self.device = "CPU"
+
+    def transcribe(self, audio: np.ndarray, prompt: str = "", language: Optional[str] = None,
+                   progress: Optional[Progress] = None) -> tuple[list[dict], str]:
+        duration = len(audio) / SR
+        segments, info = self.model.transcribe(
+            audio,
+            language=language,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+            word_timestamps=True,
+            condition_on_previous_text=False,   # avoids repetition loops on long meetings
+            initial_prompt=prompt or None,       # names and terms improve spelling
+        )
+        out = []
+        for s in segments:
+            words = [{"start": w.start, "end": w.end, "word": w.word} for w in (s.words or [])]
+            out.append({"start": s.start, "end": s.end, "text": s.text.strip(), "words": words})
+            if progress and duration:
+                progress("Transcribing", min(1.0, s.end / duration))
+        return out, info.language
+
+
+class SherpaWhisperTestASR:
+    """Small test-only backend (sherpa-onnx Whisper tiny). Same output shape, no word timings."""
+
+    def __init__(self, model_dir: str, **_):
+        import sherpa_onnx
+        d = Path(model_dir)
+        enc = next(d.glob("*-encoder.int8.onnx"))
+        dec = next(d.glob("*-decoder.int8.onnx"))
+        tok = next(d.glob("*-tokens.txt"))
+        self.rec = sherpa_onnx.OfflineRecognizer.from_whisper(encoder=str(enc), decoder=str(dec), tokens=str(tok),
+                                                             num_threads=2)
+        self.model_name = d.name
+        self.device = "CPU"
+
+    @staticmethod
+    def _chunks(audio, max_len=25 * SR):
+        """Split on pauses (simple energy gate), so each chunk is one stretch of speech."""
+        f = 320  # 20 ms
+        n = len(audio) // f
+        if n == 0:
+            return []
+        e = np.sqrt((audio[:n * f].reshape(n, f) ** 2).mean(1) + 1e-12)
+        thr = max(np.percentile(e, 20) * 3, 1e-4)
+        voiced = e > thr
+        out, start, quiet = [], None, 0
+        for i, v in enumerate(voiced):
+            if v:
+                if start is None:
+                    start = i
+                quiet = 0
+            elif start is not None:
+                quiet += 1
+                if quiet >= 25 or (i - start) * f >= max_len:  # 0.5 s pause
+                    out.append((start * f, (i - quiet + 1) * f))
+                    start, quiet = None, 0
+        if start is not None:
+            out.append((start * f, n * f))
+        return [(a, b) for a, b in out if b - a >= SR // 4]
+
+    def transcribe(self, audio, prompt="", language=None, progress=None):
+        out = []
+        n = len(audio)
+        for a, b in self._chunks(audio):
+            st = self.rec.create_stream()
+            st.accept_waveform(SR, audio[a:b])
+            self.rec.decode_stream(st)
+            text = st.result.text.strip()
+            if text:
+                out.append({"start": a / SR, "end": b / SR, "text": text, "words": []})
+            if progress:
+                progress("Transcribing", min(1.0, b / n))
+        return out, "en"
+
+
+# ---------------------------------------------------------------- speaker identification
+
+class Diarizer:
+    def __init__(self, threshold: float = 0.7, log=print):
+        import sherpa_onnx
+        seg, emb = ensure_diarization_models(log)
+        threads = max(1, (os.cpu_count() or 4) - 1)
+        self._cfg = lambda n: sherpa_onnx.OfflineSpeakerDiarizationConfig(
+            segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+                pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(seg)),
+                num_threads=threads),
+            embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(emb), num_threads=threads),
+            clustering=sherpa_onnx.FastClusteringConfig(num_clusters=n if n else -1, threshold=threshold),
+            min_duration_on=0.3,
+            min_duration_off=0.5,
+        )
+        self._sherpa = sherpa_onnx
+
+    def run(self, audio: np.ndarray, num_speakers: int = 0, progress: Optional[Progress] = None) -> list[dict]:
+        sd = self._sherpa.OfflineSpeakerDiarization(self._cfg(num_speakers))
+
+        def cb(done: int, total: int) -> int:
+            if progress and total:
+                progress("Identifying speakers", done / total)
+            return 0
+
+        result = sd.process(audio, callback=cb).sort_by_start_time()
+        return [{"start": r.start, "end": r.end, "speaker": int(r.speaker)} for r in result]
+
+
+# ---------------------------------------------------------------- merge
+
+def _speaker_at(t0: float, t1: float, turns: list[dict]) -> Optional[int]:
+    """Speaker with the most overlap in [t0, t1]; if none overlaps, the nearest turn."""
+    best, best_ov = None, 0.0
+    for tr in turns:
+        if tr["end"] < t0:
+            continue
+        if tr["start"] > t1:
+            break
+        ov = min(t1, tr["end"]) - max(t0, tr["start"])
+        if ov > best_ov:
+            best, best_ov = tr["speaker"], ov
+    if best is not None:
+        return best
+    if not turns:
+        return None
+    mid = (t0 + t1) / 2
+    near = min(turns, key=lambda tr: 0 if tr["start"] <= mid <= tr["end"] else min(abs(tr["start"] - mid), abs(tr["end"] - mid)))
+    return near["speaker"]
+
+
+def merge(segments: list[dict], turns: list[dict], join_gap: float = 1.5) -> list[dict]:
+    turns = sorted(turns, key=lambda t: t["start"])
+    units = []  # (start, end, text, speaker)
+    for s in segments:
+        if s.get("words"):
+            for w in s["words"]:
+                units.append((w["start"], w["end"], w["word"], _speaker_at(w["start"], w["end"], turns)))
+        else:
+            units.append((s["start"], s["end"], " " + s["text"], _speaker_at(s["start"], s["end"], turns)))
+    utts: list[dict] = []
+    for st, en, tx, sp in units:
+        if utts and utts[-1]["speaker"] == sp and st - utts[-1]["end"] <= join_gap:
+            utts[-1]["end"] = en
+            utts[-1]["text"] += tx
+        else:
+            utts.append({"start": st, "end": en, "speaker": sp, "text": tx})
+    for u in utts:
+        u["text"] = " ".join(u["text"].split())
+        u["start"] = round(u["start"], 2)
+        u["end"] = round(u["end"], 2)
+    return [u for u in utts if u["text"]]
+
+
+def speaker_summary(utts: list[dict]) -> list[dict]:
+    """Relabel speakers S1, S2... in order of first appearance; give talk time and sample ranges."""
+    order: list = []
+    for u in utts:
+        if u["speaker"] not in order:
+            order.append(u["speaker"])
+    label = {sp: f"S{i + 1}" for i, sp in enumerate(order)}
+    for u in utts:
+        u["speaker"] = label.get(u["speaker"], "S?")
+    out = []
+    for sp in order:
+        lab = label[sp]
+        mine = [u for u in utts if u["speaker"] == lab]
+        talk = sum(u["end"] - u["start"] for u in mine)
+        samples = sorted(mine, key=lambda u: u["end"] - u["start"], reverse=True)[:3]
+        out.append({
+            "id": lab,
+            "talk_sec": round(talk, 1),
+            "samples": [{"start": u["start"], "end": min(u["end"], u["start"] + 10), "text": u["text"][:160]} for u in samples],
+        })
+    return out
+
+
+@dataclass
+class Job:
+    path: str
+    title: str = ""
+    attendees: list = None
+    num_speakers: int = 0
+    language: Optional[str] = None
+
+
+def build_prompt(title: str, attendees: list) -> str:
+    names = [a.split(",")[0].strip() for a in (attendees or []) if a.strip()]
+    parts = []
+    if title:
+        parts.append(f"Meeting: {title}.")
+    if names:
+        parts.append("Attendees: " + ", ".join(names) + ".")
+    return " ".join(parts)
+
+
+def run_job(job: Job, asr, diarizer: Diarizer, progress: Progress) -> dict:
+    progress("Reading audio", 0.0)
+    audio = load_audio(job.path)
+    duration = len(audio) / SR
+    # weight the stages so one progress bar moves smoothly: speakers ~25%, words ~75%
+    progress("Identifying speakers", 0.0)
+    turns = diarizer.run(audio, job.num_speakers, lambda st, f: progress(st, 0.25 * f))
+    segs, lang = asr.transcribe(audio, build_prompt(job.title, job.attendees), job.language,
+                                lambda st, f: progress(st, 0.25 + 0.75 * f))
+    utts = merge(segs, turns)
+    speakers = speaker_summary(utts)
+    progress("Done", 1.0)
+    return {
+        "format": "field-notes-transcript/1",
+        "duration": round(duration, 2),
+        "language": lang,
+        "model": getattr(asr, "model_name", ""),
+        "device": getattr(asr, "device", ""),
+        "speakers": speakers,
+        "utterances": utts,
+    }

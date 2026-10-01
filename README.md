@@ -21,3 +21,7 @@ Choose **Call** before starting to record Teams, Zoom or Google Meet. In the sha
 ## Use
 
 Open the GitHub Pages URL on your phone in Safari or Chrome, then Add to Home Screen. Keep the screen on while recording; on iPhone, locking the screen stops the microphone.
+
+## Transcription (Windows laptop)
+
+`transcriber/` is a local helper that lets Field Notes transcribe recordings with speaker labels on your own computer (Whisper large-v3-turbo + sherpa-onnx speaker diarization). See [transcriber/README.md](transcriber/README.md) to install. Field Notes gains **Import file** (phone recordings, Teams/Zoom/Meet files) and **Details → Transcribe**, speaker naming, and a `_transcript.txt` in Share.

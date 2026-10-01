@@ -65,7 +65,8 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 .subrow{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px}
 .linkbtn{background:none;border:0;padding:6px 0;font:inherit;font-size:14px;font-weight:500;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:3px}
 .linkbtn:disabled{color:var(--muted);text-decoration:none}
-#title:disabled{background:transparent;border-color:transparent;padding:0;color:var(--ink);font-weight:600;font-size:18px;-webkit-text-fill-color:var(--ink);opacity:1}
+body.live #title{background:transparent;border-color:transparent;padding:4px 0;color:var(--ink);font-weight:600;font-size:18px}
+body.live #title:focus{background:var(--panel);border-color:var(--line);padding:4px 8px}
 .live .lbl{display:none}
 .item-actions{display:flex;flex-wrap:wrap;gap:8px}
 .item-actions .btn.small{min-width:72px}
@@ -122,6 +123,25 @@ input:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px soli
 body.live .new-card{background:var(--panel);border-color:var(--line)}
 body.live .new-card h2{color:var(--muted)}
 .saved-list{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.list-head{display:flex;justify-content:space-between;align-items:baseline;padding-inline:4px}
+.badge{font-size:12px;font-weight:600;color:var(--accent)}
+.tx{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding-block:12px}
+.tx-start{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.tx > .linkbtn{align-self:flex-start}
+label.inline{flex-direction:row;align-items:center;gap:6px;font-size:13px}
+label.inline input{width:72px;font:inherit;font-size:15px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)}
+.bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);transition:width .4s}
+.speakers{display:flex;flex-direction:column;gap:6px}
+.spk{display:grid;grid-template-columns:auto auto 1fr auto;gap:8px;align-items:center}
+.spk-id{font-size:13px;font-weight:600;white-space:nowrap}
+.spk-time{font:12px var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.spk input{min-width:0;font-size:15px;padding:6px 8px}
+.tx-lines{max-height:420px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:14px;line-height:1.5}
+.tx-lines p{margin:0 0 8px}
+.tx-lines time{font:12px var(--f-mono);color:var(--muted);margin-right:8px;font-variant-numeric:tabular-nums}
+.tx-note{color:var(--accent);font-style:italic}
+.warn-text{color:var(--warn)}
 .saved-list h2{padding-inline:4px}
 .list{gap:10px}
 .item{padding:14px 16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;gap:8px}
@@ -218,11 +238,12 @@ details[open] summary{margin-bottom:10px}
   </section>
 
   <section class="saved-list" id="list-panel" aria-labelledby="list-h">
-    <h2 id="list-h">Saved recordings</h2>
+    <div class="list-head"><h2 id="list-h">Saved recordings</h2><button class="linkbtn" id="import-btn">Import file</button></div>
+    <input type="file" id="import-in" multiple accept="audio/*,video/*,.wav,.m4a,.mp3,.mp4,.webm,.ogg,.mov,.txt" hidden>
     <ul class="list" id="list"></ul>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v1.10</span></footer>
+  <footer><span id="storage"></span><span id="offline">v2.0</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -262,7 +283,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v1.10.1';
+const VERSION = 'v2.0';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -459,7 +480,6 @@ function showLive(on){
   document.body.classList.toggle('live', on);
   $('#meet-h').textContent = on ? 'Meeting' : 'New meeting';
   els.idle.hidden = on; els.live.hidden = !on; els.dock.hidden = !on; els.listPanel.hidden = on;
-  els.title.disabled = on;
   if (on) els.attBox.open = false;
 }
 
@@ -778,7 +798,7 @@ function notesText(m, partsCount){
   const when = t => new Date(t).toLocaleString(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
   const out = [
     m.title, new Date(m.createdAt).toLocaleString(), `Duration: ${hms(m.durationMs)}`,
-    m.source === 'call' ? 'Source: call audio + microphone' : 'Source: microphone (in the room)',
+    m.source === 'call' ? 'Source: call audio + microphone' : m.source === 'import' ? `Source: imported file (${m.fileName || ''})` : 'Source: microphone (in the room)',
     m.boost ? `Processing: auto level on (rumble filter, adaptive gain${Number.isFinite(m.agcLo) ? ` ${m.agcLo.toFixed(0)} to ${m.agcHi.toFixed(0)} dB` : ''}, leveller)` : (m.format === 'pcm16' ? 'Processing: none' : null),
     !merged && partsCount > 1 ? `Audio parts: ${partsCount} (transcribe in order)` : null,
     '', 'Attendees:', m.attendees ? m.attendees.split('\n').filter(a => a.trim()).map(a => '- ' + a.trim()).join('\n') : '- (not recorded)'
@@ -804,11 +824,18 @@ async function buildFiles(m){
     pieces.unshift(wavHeader(pieces.reduce((n, b) => n + b.size, 0)));
     files.push(new File([new Blob(pieces, {type})], `${base}.${m.ext}`, {type}));
     files.push(new File([notesText(m, parts.length)], `${base}_notes.txt`, {type: 'text/plain'}));
+    if (m.transcript) files.push(new File([transcriptText(m)], `${base}_transcript.txt`, {type: 'text/plain'}));
+    return files;
+  }
+  if (m.format === 'import') {
+    const orig = chunks[0] && chunks[0].blob;
+    if (orig) files.push(new File([orig], `${base}.${m.ext}`, {type: orig.type || type}));
+    files.push(new File([notesText(m, 1)], `${base}_notes.txt`, {type: 'text/plain'}));
+    if (m.transcript) files.push(new File([transcriptText(m)], `${base}_transcript.txt`, {type: 'text/plain'}));
     return files;
   }
   for (const p of parts) {
     const pieces = chunks.filter(c => c.part === p).map(c => c.blob);
-    if (m.format === 'pcm16') pieces.unshift(wavHeader(pieces.reduce((n, b) => n + b.size, 0)));
     const blob = new Blob(pieces, {type});
     const name = parts.length > 1 ? `${base}_part${p}.${m.ext}` : `${base}.${m.ext}`;
     files.push(new File([blob], name, {type}));
@@ -833,13 +860,276 @@ function save(files, btn){
   if (btn) { const t = btn.textContent; btn.textContent = 'Saving…'; setTimeout(() => btn.textContent = t, 1500); }
 }
 
+/* ---------- transcription via the Field Notes Transcriber helper on this computer ---------- */
+const HELPER = 'http://127.0.0.1:8787';
+const HELPER_LATEST = '1.0.0'; // bump when transcriber/ changes; older helpers show an update notice
+const verLt = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
+const isDesktop = matchMedia('(pointer:fine)').matches;
+const MEET = new Map();          // id -> meeting object currently shown in the list
+const OPEN_TX = new Map();       // id -> transcript container of an open Details panel
+let helper = {ok: false, at: 0, info: null};
+async function checkHelper(force){
+  if (!isDesktop) return helper;
+  if (!force && Date.now() - helper.at < 8000) return helper;
+  helper.at = Date.now();
+  try {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 2000);
+    const r = await fetch(HELPER + '/health', {signal: ctl.signal, cache: 'no-store'});
+    clearTimeout(tm);
+    helper.info = await r.json(); helper.ok = r.ok && helper.info.ok;
+  } catch { helper.ok = false; helper.info = null; }
+  return helper;
+}
+function attendeeLines(m){ return (m.attendees || '').split('\n').map(s => s.trim()).filter(Boolean); }
+function attendeeNames(m){ return attendeeLines(m).map(s => s.split(',')[0].trim()).filter(Boolean); }
+function mediaFile(files){ return files.find(f => !f.name.endsWith('.txt')); }
+function speakerName(m, id){ return ((m.speakerNames || {})[id] || '').trim() || `Speaker ${String(id).replace(/^S/, '')}`; }
+
+async function startTranscription(m){
+  const h = await checkHelper(true);
+  if (!h.ok) { m.tx = {status: 'error', error: 'The transcriber is not running on this computer.'}; return refreshTx(m); }
+  m.tx = {status: 'uploading', stage: 'Sending to transcriber', progress: 0}; refreshTx(m);
+  try {
+    const f = mediaFile(await buildFiles(m));
+    const n = parseInt(m.txSpeakers, 10);
+    const r = await fetch(HELPER + '/jobs', {method: 'POST', body: f, headers: {
+      'Content-Type': f.type || 'application/octet-stream', 'X-FN-Client': 'field-notes',
+      'X-FN-Title': encodeURIComponent(m.title || ''), 'X-FN-Attendees': encodeURIComponent(JSON.stringify(attendeeLines(m))),
+      'X-FN-Speakers': String(Number.isFinite(n) && n > 0 ? n : 0), 'X-FN-Filename': encodeURIComponent(f.name)}});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    m.tx = {status: 'queued', jobId: j.id, stage: 'Queued', progress: 0, at: Date.now()};
+    await saveMeeting(m); refreshTx(m); pollJob(m.id);
+  } catch (e) { m.tx = {status: 'error', error: 'Could not send the recording: ' + (e.message || e)}; await saveMeeting(m); refreshTx(m); }
+}
+const POLLING = new Set();
+async function pollJob(id){
+  if (POLLING.has(id)) return; POLLING.add(id);
+  try {
+    let misses = 0;
+    while (true) {
+      const m = MEET.get(id) || await tx('meetings', 'readonly', s => s.get(id));
+      if (!m || !m.tx || !['queued', 'running'].includes(m.tx.status)) break;
+      let j;
+      try { const r = await fetch(`${HELPER}/jobs/${m.tx.jobId}`, {cache: 'no-store'}); j = await r.json(); if (r.status === 404) j = {status: 'error', error: 'The transcriber no longer has this job. Please transcribe again.'}; misses = 0; }
+      catch { if (++misses > 5) { m.tx.stage = 'Waiting for the transcriber (is it running?)'; refreshTx(m); await new Promise(r => setTimeout(r, 10000)); } else await new Promise(r => setTimeout(r, 2000)); continue; }
+      if (j.status === 'done') {
+        m.transcript = j.result; m.speakerNames = m.speakerNames || {};
+        m.tx = {status: 'done', jobId: m.tx.jobId, at: Date.now()};
+        await saveMeeting(m); refreshTx(m); updateCardBadge(m);
+        fetch(`${HELPER}/jobs/${j.id}`, {method: 'DELETE'}).catch(() => {});
+        break;
+      }
+      if (['error', 'cancelled'].includes(j.status)) { m.tx = {status: j.status, error: j.error || ''}; await saveMeeting(m); refreshTx(m); updateCardBadge(m); break; }
+      m.tx.status = j.status; m.tx.stage = j.ahead ? `Waiting (${j.ahead} ahead)` : j.stage; m.tx.progress = j.progress || 0;
+      refreshTx(m); updateCardBadge(m);
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  } finally { POLLING.delete(id); }
+}
+async function cancelTranscription(m){
+  if (m.tx && m.tx.jobId) fetch(`${HELPER}/jobs/${m.tx.jobId}`, {method: 'DELETE'}).catch(() => {});
+  m.tx = {status: 'cancelled'}; await saveMeeting(m); refreshTx(m); updateCardBadge(m);
+}
+function badgeText(m){
+  const t = m.tx || {};
+  if (['queued', 'running', 'uploading'].includes(t.status)) return `Transcribing ${Math.round((t.progress || 0) * 100)}%`;
+  if (m.transcript) return 'Transcript ready';
+  return '';
+}
+function updateCardBadge(m){
+  const el = document.querySelector(`[data-badge="${m.id}"]`);
+  if (el) { el.textContent = badgeText(m); el.hidden = !el.textContent; }
+}
+
+/* transcript as text: speaker names applied, consecutive lines by the same person joined, notes placed at their time */
+function transcriptLines(m){
+  const T = m.transcript; if (!T) return [];
+  const lines = [];
+  for (const u of T.utterances) {
+    const name = speakerName(m, u.speaker), last = lines[lines.length - 1];
+    if (last && last.kind === 'u' && last.name === name && u.start - last.end < 3) { last.text += ' ' + u.text; last.end = u.end; }
+    else lines.push({kind: 'u', name, start: u.start, end: u.end, text: u.text});
+  }
+  const notes = (m.markers || []).filter(k => (k.note || '').trim());
+  const timed = notes.filter(k => Number.isFinite(k.t)).map(k => ({kind: 'n', start: k.t / 1000, text: k.note}));
+  const all = [...lines, ...timed].sort((a, b) => a.start - b.start || (a.kind === 'n' ? 1 : -1));
+  notes.filter(k => !Number.isFinite(k.t)).forEach(k => all.push({kind: 'n', start: null, text: k.note}));
+  return all;
+}
+function transcriptText(m){
+  const T = m.transcript; if (!T) return '';
+  const ids = T.speakers.map(s => s.id);
+  const out = [m.title, new Date(m.createdAt).toLocaleString(), `Length: ${hms(T.duration * 1000)}`];
+  const att = attendeeLines(m); if (att.length) out.push('', 'Attendees:', ...att.map(a => '- ' + a));
+  out.push('', 'Speakers:', ...ids.map(id => `- ${speakerName(m, id)} (${hms(T.speakers.find(s => s.id === id).talk_sec * 1000)} talking)`));
+  out.push('', `Transcribed on this computer with Whisper ${T.model} (${T.device}). Lines starting "Note" are your notes, placed at the time you wrote them.`, '');
+  for (const l of transcriptLines(m)) {
+    if (l.kind === 'u') out.push(`[${hms(l.start * 1000)}] ${l.name}: ${l.text}`, '');
+    else out.push(l.start == null ? `Note (after meeting): ${l.text}` : `    Note [${hms(l.start * 1000)}]: ${l.text}`, '');
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
+}
+
+function refreshTx(m){ const box = OPEN_TX.get(m.id); if (box) renderTx(m, box); }
+let samplePlayer = null;
+async function playSample(m, s, btn){
+  if (!samplePlayer) { samplePlayer = new Audio(); samplePlayer._for = null; }
+  if (samplePlayer._for !== m.id) { const f = mediaFile(await buildFiles(m)); if (samplePlayer.src) URL.revokeObjectURL(samplePlayer.src); samplePlayer.src = URL.createObjectURL(f); samplePlayer._for = m.id; }
+  if (!samplePlayer.paused && samplePlayer._btn === btn) { samplePlayer.pause(); btn.textContent = 'Play'; return; }
+  if (samplePlayer._btn) samplePlayer._btn.textContent = 'Play';
+  samplePlayer._btn = btn; btn.textContent = 'Stop';
+  samplePlayer.currentTime = s.start; samplePlayer.play().catch(() => {});
+  clearTimeout(samplePlayer._t);
+  samplePlayer._t = setTimeout(() => { samplePlayer.pause(); btn.textContent = 'Play'; }, Math.min(8, Math.max(2, s.end - s.start)) * 1000);
+}
+
+async function renderTx(m, box){
+  box.innerHTML = '';
+  const head = document.createElement('p'); head.className = 'dhead'; head.textContent = 'Transcript'; box.append(head);
+  const t = m.tx || {};
+  const msg = txt => { const p = document.createElement('p'); p.className = 'hint'; p.textContent = txt; box.append(p); return p; };
+
+  if (['uploading', 'queued', 'running'].includes(t.status)) {
+    const bar = document.createElement('div'); bar.className = 'bar'; const fill = document.createElement('i'); fill.style.width = `${Math.round((t.progress || 0) * 100)}%`; bar.append(fill);
+    const line = document.createElement('div'); line.className = 'subrow';
+    const lab = document.createElement('span'); lab.className = 'hint'; lab.textContent = `${t.stage || 'Working'} · ${Math.round((t.progress || 0) * 100)}%`;
+    const cancel = document.createElement('button'); cancel.className = 'linkbtn'; cancel.textContent = 'Cancel'; cancel.onclick = () => cancelTranscription(m);
+    line.append(lab, cancel); box.append(bar, line);
+    msg('You can close this panel or switch windows; the transcript appears here when it is done.');
+    return;
+  }
+
+  if (m.transcript && !m.transcript.utterances.length) { msg('No speech was found in this recording.'); }
+  if (m.transcript && m.transcript.utterances.length) {
+    const T = m.transcript;
+    const names = attendeeNames(m);
+    const dl = document.createElement('datalist'); dl.id = 'att-names-' + m.id; names.forEach(n => { const o = document.createElement('option'); o.value = n; dl.append(o); });
+    const sp = document.createElement('div'); sp.className = 'speakers';
+    const intro = msg(T.speakers.length > 1 ? 'Name each speaker. Play a sample to hear who it is. Give two speakers the same name to merge them.' : 'Name the speaker.');
+    for (const s of T.speakers) {
+      const row = document.createElement('div'); row.className = 'spk';
+      const id = document.createElement('span'); id.className = 'spk-id'; id.textContent = s.id.replace('S', 'Speaker ');
+      const tt = document.createElement('span'); tt.className = 'spk-time'; tt.textContent = hms(s.talk_sec * 1000);
+      const inp = document.createElement('input'); inp.type = 'text'; inp.id = `spk-${m.id}-${s.id}`; inp.setAttribute('list', dl.id); inp.placeholder = names.length ? 'Pick or type a name' : 'Name';
+      inp.value = (m.speakerNames || {})[s.id] || '';
+      inp.addEventListener('change', async () => { m.speakerNames = {...(m.speakerNames || {}), [s.id]: inp.value.trim()}; await saveMeeting(m); drawLines(); });
+      const pb = mkBtn('Play'); pb.title = s.samples[0] ? `“${s.samples[0].text}”` : '';
+      let si = 0; pb.onclick = () => { const smp = s.samples[si % s.samples.length]; si++; playSample(m, smp, pb); };
+      row.append(id, tt, inp, pb); sp.append(row);
+    }
+    const lines = document.createElement('div'); lines.className = 'tx-lines';
+    const drawLines = () => {
+      lines.innerHTML = '';
+      for (const l of transcriptLines(m)) {
+        const p = document.createElement('p');
+        if (l.kind === 'u') {
+          const tm = document.createElement('time'); tm.textContent = hms(l.start * 1000);
+          const b = document.createElement('b'); b.textContent = l.name + ': ';
+          p.append(tm, b, document.createTextNode(l.text));
+        } else { p.className = 'tx-note'; p.textContent = l.start == null ? `Note (after meeting): ${l.text}` : `Note ${hms(l.start * 1000)}: ${l.text}`; }
+        lines.append(p);
+      }
+    };
+    drawLines();
+    const acts = document.createElement('div'); acts.className = 'row';
+    const copy = mkBtn('Copy transcript');
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(transcriptText(m)); copy.textContent = 'Copied'; } catch { copy.textContent = 'Copy failed'; } setTimeout(() => copy.textContent = 'Copy transcript', 1500); };
+    acts.append(copy);
+    const again = document.createElement('button'); again.className = 'linkbtn'; again.textContent = 'Transcribe again';
+    again.onclick = async () => { const h = await checkHelper(true); if (h.ok) startTranscription(m); else { again.textContent = 'Transcriber not running'; } };
+    const meta = msg(`Whisper ${T.model} on ${T.device} · ${T.speakers.length} speaker${T.speakers.length === 1 ? '' : 's'} · included when you Share or Save`);
+    box.append(intro, dl, sp, lines, acts, meta, again);
+    return;
+  }
+
+  if (t.status === 'error' || t.status === 'cancelled') msg(t.status === 'cancelled' ? 'Transcription cancelled.' : t.error || 'Transcription failed.').classList.add('warn-text');
+  if (!isDesktop) { msg('Transcribe on your laptop: Share this recording (audio and notes) to it, then use Import in Field Notes there.'); return; }
+  const h = await checkHelper();
+  if (!h.ok) {
+    msg('To transcribe here, start Field Notes Transcriber on this computer. It runs locally; audio never leaves the computer.');
+    const retry = document.createElement('button'); retry.className = 'linkbtn'; retry.textContent = 'Check again';
+    retry.onclick = async () => { await checkHelper(true); renderTx(m, box); };
+    const a = document.createElement('a'); a.href = 'https://github.com/martinmfranklin/meeting-recorder/blob/main/transcriber/README.md'; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Setup guide'; a.className = 'linkbtn';
+    const row = document.createElement('div'); row.className = 'subrow'; row.append(retry, a); box.append(row);
+    return;
+  }
+  const info = h.info;
+  if (verLt(info.version, HELPER_LATEST)) msg(`Transcriber update available (${info.version} → ${HELPER_LATEST}): run the install command again in PowerShell.`).classList.add('warn-text');
+  const row = document.createElement('div'); row.className = 'tx-start';
+  const go = mkBtn('Transcribe', 'primary');
+  const nlab = document.createElement('label'); nlab.className = 'inline'; nlab.textContent = 'Speakers';
+  const n = document.createElement('input'); n.type = 'number'; n.min = '0'; n.max = '20'; n.id = 'nspk-' + m.id; n.placeholder = 'auto';
+  n.value = m.txSpeakers || ''; n.addEventListener('change', () => { m.txSpeakers = n.value; saveMeeting(m); });
+  nlab.append(n);
+  go.onclick = () => startTranscription(m);
+  row.append(go, nlab); box.append(row);
+  msg(info.status === 'ready'
+    ? `Runs on this computer (${info.device}, Whisper ${info.model}). Leave Speakers on auto, or enter how many people spoke if you know.`
+    : `Transcriber is starting: ${info.detail || info.status}. You can queue this now.`);
+}
+
+/* ---------- import a recording made elsewhere (phone, Teams, Zoom, any audio or video) ---------- */
+function parseNotesTxt(text){
+  const L = text.replace(/\r/g, '').split('\n');
+  const out = {title: (L[0] || '').trim(), attendees: [], markers: [], date: Date.parse(L[1] || '') || null};
+  let sec = '';
+  for (const raw of L.slice(1)) {
+    const l = raw.trim();
+    if (!l) { sec = ''; continue; }
+    if (/^Attendees:/i.test(l)) { sec = 'att'; continue; }
+    if (/^Notes \(time in the audio\):/i.test(l) || /^Markers/i.test(l)) { sec = 'notes'; continue; }
+    if (/:$/.test(l) && !l.startsWith('-')) { sec = ''; continue; }
+    if (sec === 'att' && l.startsWith('- ') && !/not recorded/.test(l)) out.attendees.push(l.slice(2).trim());
+    if (sec === 'notes') {
+      const mm = l.match(/^-?\s*\[(\d\d):(\d\d):(\d\d)\]\s*(?:\[[^\]]*\]\s*)?(.*)$/);
+      const aa = l.match(/^-?\s*\[after meeting\]\s*(.*)$/i);
+      if (mm && mm[4] && mm[4] !== '(none)') out.markers.push({t: ((+mm[1]) * 3600 + (+mm[2]) * 60 + (+mm[3])) * 1000, type: 'note', note: mm[4]});
+      else if (aa) out.markers.push({t: null, type: 'note', note: aa[1]});
+    }
+  }
+  return out;
+}
+function mediaDuration(file){
+  return new Promise(res => {
+    const el = document.createElement(file.type.startsWith('video') ? 'video' : 'audio');
+    const url = URL.createObjectURL(file); let done = false;
+    const fin = d => { if (done) return; done = true; URL.revokeObjectURL(url); res(Number.isFinite(d) ? d * 1000 : 0); };
+    el.preload = 'metadata'; el.onloadedmetadata = () => fin(el.duration); el.onerror = () => fin(0);
+    setTimeout(() => fin(0), 8000); el.src = url;
+  });
+}
+async function importFiles(fileList){
+  const files = [...fileList];
+  const texts = files.filter(f => /\.txt$/i.test(f.name));
+  const media = files.filter(f => !/\.txt$/i.test(f.name));
+  if (!media.length) { showError('Choose an audio or video file (you can add its _notes.txt from Field Notes too).'); return; }
+  for (const f of media) {
+    const base = f.name.replace(/\.[^.]+$/, '');
+    const nt = texts.find(t => t.name.replace(/_notes\.txt$/i, '') === base) || (media.length === 1 && texts.length === 1 ? texts[0] : null);
+    const parsed = nt ? parseNotesTxt(await nt.text()) : null;
+    const ext = (f.name.match(/\.([^.]+)$/) || [, 'bin'])[1].toLowerCase();
+    const m = {
+      id: uid(), title: (parsed && parsed.title) || base.replace(/^\d{4}-\d\d-\d\d_\d{4}_/, '').replace(/[-_]+/g, ' ').trim() || 'Imported recording',
+      attendees: parsed ? parsed.attendees.join('\n') : '', createdAt: (parsed && parsed.date) || f.lastModified || Date.now(),
+      durationMs: await mediaDuration(f), format: 'import', mime: f.type || 'application/octet-stream', ext,
+      parts: 1, bytes: f.size, status: 'done', markers: parsed ? parsed.markers : [], source: 'import', fileName: f.name, segments: []
+    };
+    await saveMeeting(m);
+    await addChunk({meetingId: m.id, part: 1, seq: 0, blob: f});
+  }
+  renderList(); showStorage();
+}
+
 /* ---------- list ---------- */
 async function renderList(){
   const ms = (await allMeetings()).sort((a, b) => b.createdAt - a.createdAt);
   els.list.innerHTML = '';
   const shown = ms.filter(m => !R || m.id !== R.meeting.id);
   if (!shown.length) { const p = document.createElement('li'); p.className = 'empty'; p.textContent = 'No saved recordings yet. Recordings stay on this device until you share or delete them.'; els.list.append(p); return; }
+  MEET.clear();
   for (const m of shown) {
+    MEET.set(m.id, m);
     const li = document.createElement('li'); li.className = 'item';
     const head = document.createElement('div'); head.className = 'item-head';
     const title = document.createElement('div'); title.className = 'item-title'; title.textContent = m.title;
@@ -851,14 +1141,15 @@ async function renderList(){
     sub.textContent = new Date(m.createdAt).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})
       + (nMk ? ` · ${nMk} note${nMk > 1 ? 's' : ''}` : '')
       + (m.parts > 1 ? ` · recorded in ${m.parts} parts` : '');
-    li.append(head, sub);
+    const badge = document.createElement('div'); badge.className = 'badge'; badge.dataset.badge = m.id; badge.textContent = badgeText(m); badge.hidden = !badge.textContent;
+    li.append(head, sub, badge);
     if (m.status !== 'done') { const t = document.createElement('div'); t.className = 'tag'; t.textContent = m.status === 'recovered' ? 'Recovered after the app closed mid-recording' : 'Ended by interruption'; li.append(t); }
     const row = document.createElement('div'); row.className = 'row';
     const bPlay = mkBtn('Play'), bShare = mkBtn('Share', 'primary'), bSave = mkBtn('Save file'), bDel = mkBtn('Delete', 'danger');
     const bCont = m.format === 'pcm16' ? mkBtn('Continue') : null;
     const bInfo = mkBtn('Details');
     const details = document.createElement('div'); details.className = 'details'; details.hidden = true;
-    bInfo.onclick = () => { if (details.hidden) { m.markers = (m.markers || []).filter(k => (k.note || '').trim()); renderDetails(m, details, title); details.hidden = false; bInfo.textContent = 'Hide details'; } else { details.hidden = true; bInfo.textContent = 'Details'; renderList(); } };
+    bInfo.onclick = () => { if (!details.hidden) OPEN_TX.delete(m.id); if (details.hidden) { m.markers = (m.markers || []).filter(k => (k.note || '').trim()); renderDetails(m, details, title); details.hidden = false; bInfo.textContent = 'Hide details'; } else { details.hidden = true; bInfo.textContent = 'Details'; renderList(); } };
     if (bCont) bCont.onclick = () => { if (!R) startMeeting(m); };
     const player = document.createElement('div'); player.className = 'row';
     bPlay.onclick = async () => {
@@ -900,7 +1191,7 @@ function renderDetails(m, box, titleEl){
 
   const facts = document.createElement('dl'); facts.className = 'facts';
   const when = x => new Date(x).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
-  const rows = [['Recorded', when(m.createdAt)], ['Length', hms(m.durationMs)], ['Source', m.source === 'call' ? 'Call audio + microphone' : 'Microphone (in the room)']];
+  const rows = [['Recorded', when(m.createdAt)], ['Length', hms(m.durationMs)], ['Source', m.source === 'call' ? 'Call audio + microphone' : m.source === 'import' ? `Imported: ${m.fileName || 'file'}` : 'Microphone (in the room)']];
   if (m.boost) rows.push(['Auto level', Number.isFinite(m.agcLo) ? `On, ${m.agcLo.toFixed(0)} to ${m.agcHi.toFixed(0)} dB` : 'On']);
   const segs = (m.segments || []).filter(g => g.part > 1);
   segs.forEach(g => rows.push([`Part ${g.part}`, `from ${hms(g.startMs)} in the audio, ${when(g.at)}${g.reason ? ', ' + g.reason : ''}`]));
@@ -932,7 +1223,9 @@ function renderDetails(m, box, titleEl){
   comp.append(ni, nb);
   const hint = document.createElement('p'); hint.className = 'hint'; hint.textContent = 'To delete a note, clear its text. Edits are included the next time you share or save the files.';
 
-  box.append(field('Title', ti), field('Attendees', at), facts, nh, list, comp, hint, status);
+  const txBox = document.createElement('div'); txBox.className = 'tx';
+  OPEN_TX.set(m.id, txBox); renderTx(m, txBox);
+  box.append(field('Title', ti), field('Attendees', at), facts, txBox, nh, list, comp, hint, status);
   if (box._extra) box.append(...box._extra);
 }
 
@@ -963,9 +1256,17 @@ async function boot(){
   try { db = await openDB(); } catch { showError('Local storage is unavailable (private browsing?). Recordings cannot be saved.'); els.start.disabled = true; return; }
   // A meeting left mid-recording means the page was closed or crashed; keep what was saved.
   for (const m of await allMeetings()) if (m.status === 'recording' || m.status === 'paused') { m.status = 'recovered'; await saveMeeting(m); }
-  renderList(); showStorage(); showOffline();
+  await renderList(); showStorage(); showOffline();
+  // pick up transcriptions that were running when the app was closed
+  if (isDesktop) for (const m of await allMeetings()) if (m.tx && ['queued', 'running'].includes(m.tx.status)) pollJob(m.id);
 }
+$('#import-btn').addEventListener('click', () => $('#import-in').click());
+$('#import-in').addEventListener('change', e => { importFiles(e.target.files).finally(() => { e.target.value = ''; }); });
 els.start.addEventListener('click', () => startMeeting());
+// title and attendees can be edited while recording; save as you type
+let liveSave;
+const liveEdit = () => { if (!R) return; R.meeting.title = els.title.value.trim() || R.meeting.title; R.meeting.attendees = els.attendees.value.trim(); clearTimeout(liveSave); liveSave = setTimeout(() => R && saveMeeting(R.meeting), 500); };
+els.title.addEventListener('input', liveEdit); els.attendees.addEventListener('input', liveEdit);
 els.boostBox.checked = boost;
 els.boostBox.addEventListener('change', () => { boost = els.boostBox.checked; try { localStorage.setItem('fn-boost', boost ? 'on' : 'off'); } catch {} });
 if (canCall) {
