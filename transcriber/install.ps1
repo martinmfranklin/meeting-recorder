@@ -68,7 +68,7 @@ Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" 
 Step 'Creating environment'
 if (-not (Test-Path $Py)) { & $Sys -m venv $Venv; if ($LASTEXITCODE) { throw 'Could not create the Python environment.' } }
 Pip @('install', '--upgrade', 'pip', '--quiet') | Out-Null
-if (-not (Pip @('install', '--upgrade', '--progress-bar', 'off', 'faster-whisper', 'sherpa-onnx'))) { throw 'Package install failed (see the pip messages above).' }
+if (-not (Pip @('install', '--upgrade', '--progress-bar', 'off', 'faster-whisper', 'sherpa-onnx', 'av<19'))) { throw 'Package install failed (see the pip messages above).' }
 
 $HasNvidia = $false
 try { if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) { nvidia-smi -L | Out-Null; $HasNvidia = ($LASTEXITCODE -eq 0) } } catch {}

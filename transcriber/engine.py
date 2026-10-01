@@ -71,9 +71,26 @@ def ensure_diarization_models(log=print) -> tuple[Path, Path]:
 
 
 def load_audio(path: str) -> np.ndarray:
-    """Decode any audio/video file to 16 kHz mono float32 (uses PyAV, bundled with faster-whisper)."""
-    from faster_whisper.audio import decode_audio
-    return decode_audio(path, sampling_rate=SR).astype(np.float32)
+    """Decode any audio/video file to 16 kHz mono float32 with PyAV.
+
+    Done here rather than via faster_whisper.audio.decode_audio, which breaks with PyAV 19
+    (it passes an open() option that PyAV 19 removed)."""
+    import av
+    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=SR)
+    parts = []
+    with av.open(str(path)) as container:
+        stream = next((s for s in container.streams if s.type == "audio"), None)
+        if stream is None:
+            raise ValueError("This file has no audio track.")
+        for frame in container.decode(stream):
+            frame.pts = None  # let the resampler re-time frames (avoids errors on odd timestamps)
+            for out in resampler.resample(frame):
+                parts.append(out.to_ndarray().reshape(-1))
+        for out in resampler.resample(None):
+            parts.append(out.to_ndarray().reshape(-1))
+    if not parts:
+        return np.zeros(0, dtype=np.float32)
+    return (np.concatenate(parts).astype(np.float32) / 32768.0)
 
 
 # ---------------------------------------------------------------- speech recognition
