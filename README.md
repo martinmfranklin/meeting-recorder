@@ -3,7 +3,8 @@
 Phone-friendly web app for recording in-person meetings for later transcription.
 
 - Records 16 kHz mono 16-bit WAV (about 115 MB per hour), the format Whisper uses internally. Audio is captured directly with an AudioWorklet rather than the browser's MediaRecorder, which drops audio on iPhone Safari. The phone's noise suppression is off so distant voices are kept.
-- Saves to the phone every 5 seconds; nothing is uploaded anywhere. Recordings stay in the browser's local storage until shared or deleted.
+- Saves to the phone every 5 seconds; nothing is uploaded anywhere. Recordings stay in the browser's local storage until deleted; Delete frees the space. Copies you shared or saved elsewhere (Files, OneDrive) are separate and are not deleted from the phone.
+- Saved recordings are grouped by day (Today, Yesterday, This week, Last week, then by month; older months fold away), with search across titles, attendees, notes and transcripts once there are a few.
 - Pause, bullet notes stamped with their time in the audio, and an attendee list (Name, Role, Company).
 - Auto level (on by default): 90 Hz rumble filter, then a gain that adjusts itself during the meeting (tracks background noise, detects speech, moves up to 2 dB/s up and 6 dB/s down, holds during silence, capped so noise is not boosted too far), then a leveller and limiter. The last gain is remembered for the next recording.
 - Continue: add more recording to a saved meeting later. All parts export as one WAV; the notes file lists where each part starts.

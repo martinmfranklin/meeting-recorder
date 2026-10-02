@@ -130,12 +130,16 @@ class Inbox:
         dest = Path(it["path"]).parent / "Imported"
         try:
             dest.mkdir(exist_ok=True)
+            moved = []
             for src in (it["path"], it.get("notes_path")):
                 if src and Path(src).exists():
                     target = dest / Path(src).name
                     if target.exists():
                         target = dest / f"{Path(src).stem}_{int(time.time())}{Path(src).suffix}"
                     shutil.move(src, target)
+                    moved.append(str(target))
+            if moved:
+                it["moved_to"] = moved
             it.pop("move_pending", None)
         except Exception as e:
             self.log(f"Could not move {it['name']} to Imported yet: {e}")
@@ -194,7 +198,7 @@ class Inbox:
                     continue
                 iid = self.item_id(p, st)
                 with self.lock:
-                    if any(it["path"] == key for it in self.state["items"].values() if it["status"] != "imported"):
+                    if any(it["path"] == key for it in self.state["items"].values() if it["status"] not in ("imported", "removed")):
                         continue
                     if iid in self.state["items"]:
                         continue
@@ -274,12 +278,40 @@ class Inbox:
                     it["move_pending"] = True
                 else:
                     self._move_to_imported(it)
-            # forget old imported entries after 30 days
-            cutoff = time.time() - 30 * 86400
-            for k in [k for k, v in self.state["items"].items() if v["status"] == "imported" and v.get("imported", 0) < cutoff]:
+            # forget old imported entries after a year (kept so Delete in Field Notes can remove the OneDrive copies)
+            cutoff = time.time() - 365 * 86400
+            for k in [k for k, v in self.state["items"].items() if v["status"] in ("imported", "removed") and v.get("imported", 0) < cutoff]:
                 self.state["items"].pop(k, None)
             self._save()
             return True
+
+    def remove(self, iid):
+        """The recording was deleted in Field Notes: delete its OneDrive copies (inbox audio and notes,
+        wherever they are now, and the transcript). Teams recordings themselves are never deleted.
+        OneDrive keeps deleted files in its recycle bin."""
+        with self.lock:
+            it = self.state["items"].get(iid)
+            if not it:
+                return None
+            if self.job_active(it.get("job")):
+                return {"error": "still transcribing"}
+            paths = [it.get("transcript_path")]
+            if it["kind"] == "inbox":
+                paths += [it.get("path"), it.get("notes_path")] + list(it.get("moved_to") or [])
+            removed = []
+            for fp in paths:
+                try:
+                    if fp and Path(fp).is_file():
+                        Path(fp).unlink()
+                        removed.append(Path(fp).name)
+                except Exception as e:
+                    self.log(f"Could not delete {fp}: {e}")
+            it["status"] = "removed"
+            it["imported"] = it.get("imported") or time.time()
+            it.pop("move_pending", None)
+            self._save()
+            self.log(f"Inbox: removed {', '.join(removed) or 'nothing'} for {it['name']}")
+            return {"removed": removed}
 
     def run(self, every: float = 10.0):
         while True:

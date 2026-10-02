@@ -147,6 +147,16 @@ label.inline input{width:72px;font:inherit;font-size:15px;padding:6px 8px;border
 .tx-note{color:var(--accent);font-style:italic}
 .warn-text{color:var(--warn)}
 .saved-list h2{padding-inline:4px}
+.groups{display:flex;flex-direction:column;gap:6px}
+.group > summary{list-style:none;display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 4px;cursor:pointer;user-select:none;-webkit-user-select:none}
+.group > summary::-webkit-details-marker{display:none}
+.g-label{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.g-label::before{content:'';display:inline-block;width:0;height:0;margin-right:8px;vertical-align:1px;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+.group[open] .g-label::before{transform:rotate(90deg)}
+.g-meta{font:12px var(--f-mono);color:var(--faint);font-variant-numeric:tabular-nums}
+.group > .list{padding-bottom:6px}
+.search input{width:100%;font:inherit;font-size:16px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
+.groups > .empty{padding:14px 16px;border:1px dashed var(--line);border-radius:var(--r)}
 .list{gap:10px}
 .item{padding:14px 16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;gap:8px}
 .list .empty{padding:14px 16px;border:1px dashed var(--line);border-radius:var(--r)}
@@ -246,10 +256,11 @@ details[open] summary{margin-bottom:10px}
     <p class="notice ok-notice" id="inbox-flash" hidden></p>
     <div class="inbox-panel" id="inbox-panel" hidden></div>
     <input type="file" id="import-in" multiple accept="audio/*,video/*,.wav,.m4a,.mp3,.mp4,.webm,.ogg,.mov,.txt" hidden>
-    <ul class="list" id="list"></ul>
+    <div class="search" id="search-wrap" hidden><input type="search" id="search" placeholder="Search titles, attendees, notes, transcripts" aria-label="Search recordings" autocomplete="off"></div>
+    <div class="groups" id="list"></div>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v2.3</span></footer>
+  <footer><span id="storage"></span><span id="offline">v2.4</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -282,14 +293,14 @@ const els = {
   idle: $('#idle-view'), live: $('#live-view'), listPanel: $('#list-panel'),
   types: $('#types'), noteIn: $('#note-in'), noteAdd: $('#note-add'), partNote: $('#part-note'), markers: $('#markers'), markersEmpty: $('#markers-empty'), interrupt: $('#interrupt'),
   dock: $('#dock'), dotbtn: $('#dotbtn'), peek: $('#peek'), pause: $('#pause'), pocketBtn: $('#pocket-btn'), stop: $('#stop'),
-  list: $('#list'), storage: $('#storage'), offline: $('#offline'), support: $('#support'), today: $('#today'),
+  list: $('#list'), search: $('#search'), searchWrap: $('#search-wrap'), storage: $('#storage'), offline: $('#offline'), support: $('#support'), today: $('#today'),
   pocket: $('#pocket'), alarm: $('#alarm'), alarmP: $('#alarm-p'), alarmResume: $('#alarm-resume'), alarmStop: $('#alarm-stop')
 };
 els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v2.3';
+const VERSION = 'v2.4';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -918,7 +929,7 @@ function save(files, btn){
 
 /* ---------- transcription via the Field Notes Transcriber helper on this computer ---------- */
 const HELPER = 'http://127.0.0.1:8787';
-const HELPER_LATEST = '1.3.1'; // bump when transcriber/ changes; older helpers show an update notice
+const HELPER_LATEST = '1.4.0'; // bump when transcriber/ changes; older helpers show an update notice
 const verLt = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
 const isDesktop = matchMedia('(pointer:fine)').matches;
 const MEET = new Map();          // id -> meeting object currently shown in the list
@@ -1235,6 +1246,17 @@ async function syncInbox(){
   }
   if (added) { await renderList(); showStorage(); flashInbox(`Added ${added} recording${added > 1 ? 's' : ''} from OneDrive`); }
 }
+/* Deleting an inbox recording also removes its OneDrive copies (audio, notes, transcript).
+   Teams' own recording is never touched. OneDrive keeps deleted files in its recycle bin. */
+async function removeFromOneDrive(m){
+  try {
+    const r = await fetch(`${HELPER}/inbox/${m.inboxId}/remove`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 409) flashInbox('Deleted here. It was still being transcribed, so the OneDrive copies were left in place.');
+    else if (r.status === 404 && d.error === 'not found') flashInbox('Deleted here. Update the transcriber (run the installer again) so Delete also clears OneDrive.');
+    else if (d.removed && d.removed.length) flashInbox(`Removed ${d.removed.length} file${d.removed.length > 1 ? 's' : ''} from OneDrive (still in the OneDrive recycle bin).`);
+  } catch { flashInbox('Deleted here. The transcriber is not running, so the OneDrive copies were left in place.'); }
+}
 function flashInbox(t){ const el = $('#inbox-flash'); el.textContent = t; el.hidden = false; clearTimeout(el._t); el._t = setTimeout(() => el.hidden = true, 6000); }
 function drawInboxStatus(){
   const btn = $('#inbox-btn');
@@ -1267,13 +1289,61 @@ function startInbox(){
 }
 
 /* ---------- list ---------- */
+/* Groups: Today, Yesterday, This week, Last week, then one per month. Recent groups start open;
+   older months start folded (unless the whole list is short). Open/closed is remembered per session. */
+const GROUP_OPEN = new Map();
+function groupOf(ts, now = new Date()){
+  const day = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const t0 = day(now), d = new Date(ts), dd = day(d);
+  const weekStart = t0 - ((now.getDay() + 6) % 7) * 864e5;   // Monday
+  if (dd === t0) return {key: 'today', label: 'Today', recent: true};
+  if (dd === t0 - 864e5) return {key: 'yesterday', label: 'Yesterday', recent: true};
+  if (dd >= weekStart) return {key: 'week', label: 'Earlier this week', recent: true};
+  if (dd >= weekStart - 7 * 864e5) return {key: 'lastweek', label: 'Last week', recent: true};
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return {key: `m${d.getFullYear()}-${d.getMonth()}`, label: d.toLocaleString(undefined, sameYear ? {month: 'long'} : {month: 'long', year: 'numeric'}),
+          recent: sameYear && d.getMonth() === now.getMonth()};
+}
+function searchText(m){
+  return [m.title, m.attendees, m.fileName, ...(m.markers || []).map(k => k.note), m.transcript ? transcriptText(m) : ''].join('\n').toLowerCase();
+}
 async function renderList(){
   const ms = (await allMeetings()).sort((a, b) => b.createdAt - a.createdAt);
   els.list.innerHTML = '';
-  const shown = ms.filter(m => !R || m.id !== R.meeting.id);
-  if (!shown.length) { const p = document.createElement('li'); p.className = 'empty'; p.textContent = 'No saved recordings yet. Recordings stay on this device until you share or delete them.'; els.list.append(p); return; }
+  const all = ms.filter(m => !R || m.id !== R.meeting.id);
+  const q = (els.search.value || '').trim().toLowerCase();
+  els.searchWrap.hidden = all.length < 6 && !q;
+  const shown = q ? all.filter(m => q.split(/\s+/).every(w => searchText(m).includes(w))) : all;
+  if (!shown.length) {
+    const p = document.createElement('p'); p.className = 'empty';
+    p.textContent = q ? 'No recordings match.' : 'No saved recordings yet. Recordings stay on this device until you share or delete them.';
+    els.list.append(p); return;
+  }
   MEET.clear();
+  const groups = [];
   for (const m of shown) {
+    const g = groupOf(m.createdAt);
+    if (!groups.length || groups[groups.length - 1].key !== g.key) groups.push({...g, items: []});
+    groups[groups.length - 1].items.push(m);
+  }
+  const fold = !q && shown.length > 8;
+  for (const g of groups) {
+    const box = document.createElement('details'); box.className = 'group';
+    box.open = !fold || (GROUP_OPEN.has(g.key) ? GROUP_OPEN.get(g.key) : g.recent);
+    box.addEventListener('toggle', () => GROUP_OPEN.set(g.key, box.open));
+    const sum = document.createElement('summary');
+    const lab = document.createElement('span'); lab.className = 'g-label'; lab.textContent = g.label;
+    const cnt = document.createElement('span'); cnt.className = 'g-meta';
+    const ms = g.items.reduce((s, m) => s + (m.durationMs || 0), 0);
+    cnt.textContent = `${g.items.length} · ${hms(ms)}`;
+    sum.append(lab, cnt);
+    const ul = document.createElement('ul'); ul.className = 'list';
+    box.append(sum, ul); els.list.append(box);
+    for (const m of g.items) ul.append(itemCard(m));
+  }
+}
+function itemCard(m){
+  {
     MEET.set(m.id, m);
     const li = document.createElement('li'); li.className = 'item';
     const head = document.createElement('div'); head.className = 'item-head';
@@ -1309,8 +1379,11 @@ async function renderList(){
     bSave.onclick = () => saveFiles(m, bSave);
     let armed = 0;
     bDel.onclick = async () => {
-      if (!armed) { armed = setTimeout(() => { armed = 0; bDel.textContent = 'Delete'; }, 3000); bDel.textContent = 'Tap again to delete'; return; }
-      clearTimeout(armed); await deleteMeeting(m.id); renderList(); showStorage();
+      const cloud = isDesktop && m.inboxId;
+      if (!armed) { armed = setTimeout(() => { armed = 0; bDel.textContent = 'Delete'; }, 4000); bDel.textContent = cloud ? 'Tap again: delete here and in OneDrive' : 'Tap again to delete'; return; }
+      clearTimeout(armed); bDel.disabled = true;
+      if (cloud) await removeFromOneDrive(m);
+      await deleteMeeting(m.id); renderList(); showStorage();
     };
     row.className = 'item-actions';
     bDel.classList.add('push-right');
@@ -1326,7 +1399,7 @@ async function renderList(){
     extra.append(left);
     li.append(row, details);
     details._extra = [extra, player];
-    els.list.append(li);
+    return li;
   }
 }
 function renderDetails(m, box, titleEl){
@@ -1414,6 +1487,7 @@ async function boot(){
   startInbox();
 }
 $('#import-btn').addEventListener('click', () => $('#import-in').click());
+let searchT; els.search.addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(renderList, 150); });
 $('#inbox-btn').addEventListener('click', () => { const p = $('#inbox-panel'); p.hidden = !p.hidden; });
 $('#import-in').addEventListener('change', e => { importFiles(e.target.files).finally(() => { e.target.value = ''; }); });
 els.start.addEventListener('click', () => startMeeting());

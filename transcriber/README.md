@@ -47,6 +47,7 @@ The transcriber watches **`OneDrive\Field Notes Inbox`** (created automatically)
 - **Teams recordings:** in Field Notes, click **OneDrive inbox: on** and tick **Also pick up Teams recordings**. New files in `OneDrive\Recordings` (where Teams saves meetings you record) are picked up; recordings already there are skipped, and Teams files are never moved.
 - Every inbox or Teams recording also gets a transcript in **`OneDrive\Field Notes Inbox\Transcripts`**, so you can read it anywhere OneDrive syncs, including your phone. When you name the speakers in Field Notes, that copy is updated with the names.
 - Field Notes collects new items whenever it is open on this computer (every 20 seconds and when you switch back to it). Transcription itself runs even if Field Notes is closed.
+- **Deleting** an inbox or Teams recording in Field Notes on this computer also deletes its OneDrive copies: the audio and notes in `Imported` and the transcript in `Transcripts` (Teams' own recording is left alone). OneDrive keeps them in its recycle bin for a while if you need one back.
 - To turn the inbox off, start the helper with `--no-inbox`.
 
 ## Resource use

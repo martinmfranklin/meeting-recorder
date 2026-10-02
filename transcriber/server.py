@@ -37,7 +37,7 @@ import inbox as inbox_mod
 import mimetypes
 import os
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 DEFAULT_ORIGINS = [r"https://martinmfranklin\.github\.io", r"http://localhost(:\d+)?", r"http://127\.0\.0\.1(:\d+)?"]
 
 
@@ -420,6 +420,12 @@ def make_handler(st: State):
                 if m:
                     ok = st.inbox.write_transcript(m.group(1), body.decode("utf-8", errors="replace"))
                     return self._json(200 if ok else 404, {"ok": ok})
+                m = re.fullmatch(r"/inbox/(\w+)/remove", path)
+                if m:
+                    res = st.inbox.remove(m.group(1))
+                    if res is None:
+                        return self._json(404, {"error": "unknown item"})
+                    return self._json(409 if "error" in res else 200, res)
                 m = re.fullmatch(r"/inbox/(\w+)/imported", path)
                 if m:
                     return self._json(200 if st.inbox.mark_imported(m.group(1)) else 404, {"ok": True})
