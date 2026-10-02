@@ -16,7 +16,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/mar
 
 It installs Python 3.12 for your user if needed, sets up its own environment in `%LOCALAPPDATA%\FieldNotesTranscriber`, downloads the models (about 1.7 GB, once), starts the helper now and at every sign-in (hidden), and adds **Send to > Transcribe (Field Notes)** to the right-click menu.
 
-Check it is running: open <http://127.0.0.1:8787> in a browser.
+Check it is running: open <http://127.0.0.1:8787> in a browser. The page lists recent jobs; **Remove** or **Clear finished and failed** tidies that list (saved transcripts are kept).
 
 ## Use
 

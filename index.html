@@ -260,7 +260,7 @@ details[open] summary{margin-bottom:10px}
     <div class="groups" id="list"></div>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v2.4</span></footer>
+  <footer><span id="storage"></span><span id="offline">v2.4.1</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -300,7 +300,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v2.4';
+const VERSION = 'v2.4.1';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -929,7 +929,7 @@ function save(files, btn){
 
 /* ---------- transcription via the Field Notes Transcriber helper on this computer ---------- */
 const HELPER = 'http://127.0.0.1:8787';
-const HELPER_LATEST = '1.4.0'; // bump when transcriber/ changes; older helpers show an update notice
+const HELPER_LATEST = '1.4.1'; // bump when transcriber/ changes; older helpers show an update notice
 const verLt = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
 const isDesktop = matchMedia('(pointer:fine)').matches;
 const MEET = new Map();          // id -> meeting object currently shown in the list

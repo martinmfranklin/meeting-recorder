@@ -34,10 +34,11 @@ import engine
 import formats
 import secrets
 import inbox as inbox_mod
+import html as html_mod
 import mimetypes
 import os
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 DEFAULT_ORIGINS = [r"https://martinmfranklin\.github\.io", r"http://localhost(:\d+)?", r"http://127\.0\.0\.1(:\d+)?"]
 
 
@@ -501,17 +502,27 @@ def make_handler(st: State):
             self._json(200, {"ok": True})
 
         def _page(self):
+            def rm_btn(j):
+                if j["status"] in ("queued", "running"):
+                    return ""
+                return "<button onclick='rm(" + html_mod.escape(json.dumps([j['id']]), quote=True) + ")'>Remove</button>"
             rows = "".join(
                 f"<tr><td>{time.strftime('%b %d %H:%M', time.localtime(j['created']))}</td><td>{j.get('title') or j.get('filename')}</td>"
-                f"<td>{j['status']}</td><td>{int(100 * j.get('progress', 0))}%</td></tr>"
+                f"<td>{j['status']}</td><td>{int(100 * j.get('progress', 0))}%</td>"
+                f"<td>{rm_btn(j)}</td></tr>"
                 for j in sorted(st.jobs.values(), key=lambda x: -x["created"])[:20])
+            done = [j["id"] for j in st.jobs.values() if j["status"] not in ("queued", "running")]
+            clear = ("<p><button onclick='rm(" + html_mod.escape(json.dumps(done), quote=True) + ")'>Clear finished and failed</button> "
+                     "<small>Removes them from this list only. Transcripts already saved (in Field Notes, OneDrive or next to your files) are kept.</small></p>") if done else ""
             html = f"""<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=5><title>Field Notes Transcriber</title>
 <style>body{{font:15px system-ui,sans-serif;max-width:640px;margin:32px auto;padding:0 16px;color:#18212b}}td,th{{padding:4px 10px;text-align:left;border-bottom:1px solid #ddd}}</style>
 <h1>Field Notes Transcriber</h1><p>Status: <b>{st.status}</b> &middot; {st.detail}</p>
 <p>Model {st.args.model}{' on ' + st.last_device if st.last_device else ''} &middot; {'loaded' if st.status == 'ready' else 'loads when needed, unloads after ' + str(st.args.idle_minutes) + ' idle minutes'} &middot; version {VERSION}</p>
 <p>Start transcriptions from Field Notes (Details &rarr; Transcribe). Audio stays on this computer.</p>
 <p>Watching: {'; '.join(f"{f['path']}{'' if f['kind']=='inbox' or f.get('on') else ' (off)'}" for f in (st.inbox.folders() if st.inbox else [])) or 'nothing'}</p>
-<table><tr><th>When</th><th>Recording</th><th>Status</th><th></th></tr>{rows}</table>"""
+<table><tr><th>When</th><th>Recording</th><th>Status</th><th></th><th></th></tr>{rows}</table>
+{clear}
+<script>async function rm(ids){{for(const id of ids)await fetch('/jobs/'+id,{{method:'DELETE'}});location.reload()}}</script>"""
             body = html.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
