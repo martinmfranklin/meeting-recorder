@@ -260,7 +260,7 @@ details[open] summary{margin-bottom:10px}
     <div class="groups" id="list"></div>
   </section>
 
-  <footer><span id="storage"></span><span id="offline">v2.4.1</span></footer>
+  <footer><span id="storage"></span><span id="offline">v2.4.2</span></footer>
 </main>
 
 <div class="dock" id="dock" data-s="recording" hidden>
@@ -300,7 +300,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v2.4.1';
+const VERSION = 'v2.4.2';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -1136,11 +1136,11 @@ async function renderTx(m, box){
     const retry = document.createElement('button'); retry.className = 'linkbtn'; retry.textContent = 'Check again';
     retry.onclick = async () => { await checkHelper(true); renderTx(m, box); };
     const a = document.createElement('a'); a.href = 'https://github.com/martinmfranklin/meeting-recorder/blob/main/transcriber/README.md'; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Setup guide'; a.className = 'linkbtn';
-    const row = document.createElement('div'); row.className = 'subrow'; row.append(retry, a); box.append(row);
+    const row = document.createElement('div'); row.className = 'subrow'; row.append(installLink('Download installer'), retry, a); box.append(row);
     return;
   }
   const info = h.info;
-  if (verLt(info.version, HELPER_LATEST)) msg(`Transcriber update available (${info.version} → ${HELPER_LATEST}): run the install command again in PowerShell.`).classList.add('warn-text');
+  if (verLt(info.version, HELPER_LATEST)) { const u = msg(`Transcriber update available (${info.version} → ${HELPER_LATEST}). Download the installer and double-click it; it keeps your models and settings. `); u.classList.add('warn-text'); u.append(installLink('Download installer')); }
   const row = document.createElement('div'); row.className = 'tx-start';
   const go = mkBtn('Transcribe', 'primary');
   const nlab = document.createElement('label'); nlab.className = 'inline'; nlab.textContent = 'Speakers';
@@ -1256,6 +1256,11 @@ async function removeFromOneDrive(m){
     else if (r.status === 404 && d.error === 'not found') flashInbox('Deleted here. Update the transcriber (run the installer again) so Delete also clears OneDrive.');
     else if (d.removed && d.removed.length) flashInbox(`Removed ${d.removed.length} file${d.removed.length > 1 ? 's' : ''} from OneDrive (still in the OneDrive recycle bin).`);
   } catch { flashInbox('Deleted here. The transcriber is not running, so the OneDrive copies were left in place.'); }
+}
+function installLink(text){
+  const a = document.createElement('a'); a.className = 'linkbtn'; a.textContent = text;
+  a.href = 'transcriber/Install-Field-Notes-Transcriber.cmd'; a.download = 'Install Field Notes Transcriber.cmd';
+  return a;
 }
 function flashInbox(t){ const el = $('#inbox-flash'); el.textContent = t; el.hidden = false; clearTimeout(el._t); el._t = setTimeout(() => el.hidden = true, 6000); }
 function drawInboxStatus(){

@@ -6,9 +6,15 @@ A small helper that runs on your Windows laptop and lets Field Notes transcribe 
 - Who spoke when: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) speaker diarization (pyannote segmentation 3.0 + NeMo TitaNet speaker embeddings)
 - Reads any audio or video: Field Notes WAV, phone voice memos, Teams/Zoom/Meet MP4, MP3, M4A
 
-## Install (once)
+## Install, update, or set up another computer
 
-Open **PowerShell** (no admin needed) and run:
+The same installer does all three. No admin rights needed.
+
+1. Download **[Install Field Notes Transcriber.cmd](https://martinmfranklin.github.io/meeting-recorder/transcriber/Install-Field-Notes-Transcriber.cmd)** (Field Notes on a computer also shows a *Download installer* link when the transcriber is missing or out of date).
+2. Double-click it. If Windows SmartScreen warns, choose **More info → Run anyway** (Chrome may also ask you to **Keep** the file).
+3. Leave the window open until it says **INSTALL FINISHED**. First time on a computer: 10 to 20 minutes (about 1.7 GB of models). Updates: a minute or two. A log is written to `Downloads\FieldNotes-install-log.txt`.
+
+Or, in **PowerShell**:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/martinmfranklin/meeting-recorder/main/transcriber/install.ps1 | iex"
