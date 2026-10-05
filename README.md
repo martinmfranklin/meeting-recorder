@@ -12,6 +12,7 @@ Phone-friendly web app for recording in-person meetings for later transcription.
 - Silent and discreet: no sounds or vibration. While recording the page shows only your notes and a small status dot; tap the dot to see elapsed time for 3 seconds.
 - Interruption screen: if a call or another app takes the mic, a full-screen Resume button appears (no sound). Resumed audio is saved as a new part.
 - Check setup: 5-second mic test with playback, plus storage, battery, screen-awake and offline status.
+- Microphone choice: pick the mic under Microphone (the browser cannot see which mic Teams uses). The choice is remembered; if it is not connected, the app warns before recording instead of quietly using another mic. Test mic shows a live level for 10 seconds. The mic used is listed in the notes file.
 - Works offline after the first visit (service worker).
 - Share exports the audio (.wav) plus a `_notes.txt` with attendees, recording breaks, and bullet notes with audio timestamps, ready for Buzz or another Whisper-based transcriber.
 

@@ -81,6 +81,16 @@ body.live #title:focus{background:var(--panel);border-color:var(--line);padding:
 .seg-b small{font-size:11px;font-weight:400;color:var(--faint)}
 .seg-b[aria-checked=true]{background:var(--bg);color:var(--ink);box-shadow:inset 0 -2px 0 var(--accent)}
 .hint{font-size:13px;color:var(--muted);margin:0}
+.mic{display:flex;flex-direction:column;gap:6px}
+.mic-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.mic-top .lbl2{font-size:13px;font-weight:600;color:var(--muted)}
+.mic select{width:100%;font:inherit;font-size:15px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);min-width:0}
+.mic-meter{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+.lvl{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.lvl i{display:block;height:100%;width:0;background:var(--faint);transition:width .08s linear}
+.lvl.hear i{background:var(--ok)}
+.mic-state{font-size:12px;color:var(--muted);white-space:nowrap}
+.mic-state.bad{color:var(--danger)} .mic-state.good{color:var(--ok)}
 .notice{font-size:13px;border-radius:8px;padding:10px 12px;background:var(--warn-soft);color:var(--warn);margin:0}
 
 /* markers: neutral buttons, color only on the small chip */
@@ -226,7 +236,13 @@ details[open] summary{margin-bottom:10px}
         <button class="seg-b" role="radio" aria-checked="true" data-src="mic">In the room<small>microphone</small></button>
         <button class="seg-b" role="radio" aria-checked="false" data-src="call">Call<small>Teams, Zoom, Meet + mic</small></button>
       </div>
-      <p class="hint" id="call-hint" hidden>After Start, click your screen, check <b>Share system audio</b> is on, then Share. Use a headset.</p>
+      <p class="notice" id="call-hint" hidden>In Chrome's share window: <b>Entire Screen</b>, then switch <b>Share system audio</b> on (Chrome leaves it off), then Share.</p>
+      <div class="mic" id="mic-row" hidden>
+        <div class="mic-top"><label class="lbl2" for="mic-sel">Microphone</label><button class="linkbtn" id="mic-test" type="button">Test mic</button></div>
+        <select id="mic-sel"></select>
+        <div class="mic-meter"><div class="lvl" id="mic-lvl" aria-hidden="true"><i></i></div><span class="mic-state" id="mic-state" aria-live="polite"></span></div>
+        <p class="notice" id="mic-warn" hidden></p>
+      </div>
       <label class="toggle" for="boost"><input type="checkbox" id="boost" checked> <span><b>Auto level</b><small>Evens out quiet and distant voices.</small></span></label>
       <button class="btn primary wide" id="start">Start recording</button>
       <div class="subrow">
@@ -294,13 +310,14 @@ const els = {
   types: $('#types'), noteIn: $('#note-in'), noteAdd: $('#note-add'), partNote: $('#part-note'), markers: $('#markers'), markersEmpty: $('#markers-empty'), interrupt: $('#interrupt'),
   dock: $('#dock'), dotbtn: $('#dotbtn'), peek: $('#peek'), pause: $('#pause'), pocketBtn: $('#pocket-btn'), stop: $('#stop'),
   list: $('#list'), search: $('#search'), searchWrap: $('#search-wrap'), storage: $('#storage'), offline: $('#offline'), support: $('#support'), today: $('#today'),
+  micRow: $('#mic-row'), micSel: $('#mic-sel'), micTest: $('#mic-test'), micLvl: $('#mic-lvl'), micState: $('#mic-state'), micWarn: $('#mic-warn'),
   pocket: $('#pocket'), alarm: $('#alarm'), alarmP: $('#alarm-p'), alarmResume: $('#alarm-resume'), alarmStop: $('#alarm-stop')
 };
 els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v2.4.2';
+const VERSION = 'v2.5.0';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -449,7 +466,7 @@ function wavHeader(dataBytes){
    Audio players and Whisper ignore unknown chunks; Field Notes and the transcriber read it back. */
 function metaOf(m){
   return {format: 'field-notes-meta/1', title: m.title, attendees: m.attendees || '', createdAt: m.createdAt, durationMs: m.durationMs,
-          source: m.source, boost: !!m.boost, agcLo: m.agcLo, agcHi: m.agcHi, segments: m.segments || [],
+          source: m.source, mic: m.mic || '', boost: !!m.boost, agcLo: m.agcLo, agcHi: m.agcHi, segments: m.segments || [],
           markers: (m.markers || []).filter(k => (k.note || '').trim())};
 }
 function wavWithMeta(pieces, meta){
@@ -494,11 +511,108 @@ function setState(s){ els.dock.dataset.s = s; }
 // elapsed = audio actually captured, so marker times line up with the audio file exactly
 function elapsed(){ return R ? R.samples / RATE * 1000 : 0; }
 
-async function getStream(){
-  return navigator.mediaDevices.getUserMedia({audio: {
-    channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true
-  }});
+/* ---------- microphone choice ----------
+   The browser cannot see which mic Teams uses, so the mic is chosen here and remembered.
+   The saved choice is matched by id, then by name (ids can change after a driver update).
+   If it is not connected, the app says so instead of quietly using another mic. */
+const MIC_KEY = 'fn-mic';
+let micPref = null; // {id, label}; null = system default
+try { micPref = JSON.parse(localStorage.getItem(MIC_KEY) || 'null'); } catch {}
+let micList = [], micLabelled = false, defaultLabel = '';
+const cleanLabel = l => (l || '').replace(/^Default - /, '').replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, '').trim();
+function saveMicPref(){ try { micPref ? localStorage.setItem(MIC_KEY, JSON.stringify(micPref)) : localStorage.removeItem(MIC_KEY); } catch {} }
+function micMissing(){ return !!(micPref && micLabelled && !micList.some(d => d.deviceId === micPref.id)); }
+function showMicWarn(){
+  els.micWarn.hidden = !micMissing();
+  if (micMissing()) els.micWarn.textContent = `Your usual mic, ${micPref.label}, is not connected. Plug it in, or choose another mic above.`;
 }
+async function refreshMics(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  let all = [];
+  try { all = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications'); } catch { return; }
+  micLabelled = all.some(d => d.label);
+  const def = all.find(d => d.deviceId === 'default');
+  defaultLabel = def ? cleanLabel(def.label) : '';
+  micList = micLabelled ? all.filter(d => d.deviceId !== 'default' && d.label) : [];
+  // remap a saved mic whose id changed but whose name is still there
+  if (micPref && micLabelled && !micList.some(d => d.deviceId === micPref.id)) {
+    const byName = micList.find(d => cleanLabel(d.label) === micPref.label);
+    if (byName) { micPref.id = byName.deviceId; saveMicPref(); }
+  }
+  const sel = els.micSel; sel.innerHTML = '';
+  const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.append(o); };
+  add('', defaultLabel ? `System default (${defaultLabel})` : micLabelled ? 'System default' : 'System default (tap Test mic to list all)');
+  micList.forEach(d => add(d.deviceId, cleanLabel(d.label)));
+  if (micPref && !micList.some(d => d.deviceId === micPref.id)) add(micPref.id, micPref.label + (micLabelled ? ' (not connected)' : ''));
+  sel.value = micPref ? micPref.id : '';
+  els.micRow.hidden = !(canCall || micList.length > 1 || micPref);
+  showMicWarn();
+}
+async function getStream(opts = {}){
+  const id = micPref && !opts.fallback ? micPref.id : null;
+  let s;
+  try {
+    s = await navigator.mediaDevices.getUserMedia({audio: {
+      channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true,
+      ...(id ? {deviceId: {exact: id}} : {})
+    }});
+  } catch (e) {
+    if (id && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) {
+      const err = new Error(`The selected microphone (${micPref.label}) is not connected. Plug it in or choose another mic, then try again.`); err.name = 'MicMissing'; throw err;
+    }
+    throw e;
+  }
+  refreshMics(); // names become available once access is granted
+  return s;
+}
+const micName = s => { const t = s && s.getAudioTracks()[0]; return t ? cleanLabel(t.label) || 'Microphone' : ''; };
+
+/* level meter before recording: runs only when asked (Test mic, or a new choice), then lets go of the mic */
+let pv = null;
+function setMicState(text, cls){ els.micState.textContent = text; els.micState.className = 'mic-state' + (cls ? ' ' + cls : ''); }
+function stopPreview(){
+  if (!pv) return;
+  clearInterval(pv.timer); clearTimeout(pv.end);
+  pv.stream.getTracks().forEach(t => t.stop()); try { pv.ctx.close(); } catch {}
+  pv = null;
+  els.micLvl.firstElementChild.style.width = '0'; els.micLvl.classList.remove('hear');
+}
+async function startPreview(){
+  stopPreview();
+  if (R) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC(); try { ctx.resume(); } catch {}
+  setMicState('Opening mic…');
+  let stream;
+  try { stream = await getStream(); }
+  catch (e) { try { ctx.close(); } catch {} setMicState(e.name === 'MicMissing' ? 'Not connected' : e.name === 'NotAllowedError' ? 'Mic access blocked' : 'Could not open mic', 'bad'); showMicWarn(); return; }
+  const an = ctx.createAnalyser(); an.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(an);
+  const buf = new Float32Array(an.fftSize);
+  const name = micName(stream);
+  let heard = false;
+  setMicState('Say something…');
+  const timer = setInterval(() => {
+    an.getFloatTimeDomainData(buf);
+    let q = 0; for (let i = 0; i < buf.length; i++) q += buf[i] * buf[i];
+    const db = 10 * Math.log10(q / buf.length + 1e-12);
+    const on = db > -45;
+    els.micLvl.firstElementChild.style.width = Math.max(0, Math.min(100, (db + 60) / 50 * 100)) + '%';
+    els.micLvl.classList.toggle('hear', on);
+    if (on && !heard) { heard = true; setMicState('Hearing you', 'good'); }
+  }, 50);
+  const end = setTimeout(() => { stopPreview(); setMicState(heard ? `Working: ${name}` : `Nothing heard on ${name}`, heard ? 'good' : 'bad'); }, 10000);
+  pv = {stream, ctx, timer, end};
+}
+els.micTest.addEventListener('click', startPreview);
+els.micSel.addEventListener('change', () => {
+  const v = els.micSel.value;
+  const d = micList.find(x => x.deviceId === v);
+  micPref = v ? {id: v, label: d ? cleanLabel(d.label) : (micPref && micPref.label) || 'Microphone'} : null;
+  saveMicPref(); showMicWarn(); startPreview();
+});
+navigator.mediaDevices && navigator.mediaDevices.addEventListener && navigator.mediaDevices.addEventListener('devicechange', refreshMics);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') stopPreview(); });
 
 let source = 'mic';
 let boost = true;
@@ -511,8 +625,8 @@ function setSource(v){
   try { localStorage.setItem('fn-source', v); } catch {}
 }
 // Returns {all: MediaStream of every track to stop later, inputs: [MediaStream per audio source]}
-async function acquire(mode){
-  if (mode !== 'call') { const mic = await getStream(); return {all: mic, inputs: [{stream: mic, boost}]}; }
+async function acquire(mode, opts = {}){
+  if (mode !== 'call') { const mic = await getStream(opts); return {all: mic, inputs: [{stream: mic, boost}], micLabel: micName(mic)}; }
   const disp = await navigator.mediaDevices.getDisplayMedia({
     video: {displaySurface: 'monitor', width: {max: 640}, frameRate: {max: 1}}, // opens the picker on Entire screen
     audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false},
@@ -524,12 +638,12 @@ async function acquire(mode){
     const err = new Error('No call audio was shared. Choose Entire screen and switch on Share system audio.'); err.name = 'NoSystemAudio'; throw err;
   }
   let mic;
-  try { mic = await getStream(); } catch (e) { disp.getTracks().forEach(t => t.stop()); throw e; }
+  try { mic = await getStream(opts); } catch (e) { disp.getTracks().forEach(t => t.stop()); throw e; }
   const all = new MediaStream([...disp.getTracks(), ...mic.getAudioTracks()]);
-  return {all, inputs: [{stream: new MediaStream([sys[0]]), boost: false}, {stream: mic, boost}]};
+  return {all, inputs: [{stream: new MediaStream([sys[0]]), boost: false}, {stream: mic, boost}], micLabel: micName(mic)};
 }
 function captureError(e){
-  if (e.name === 'NoSystemAudio') return e.message;
+  if (e.name === 'NoSystemAudio' || e.name === 'MicMissing') return e.message;
   if (e.name === 'NotAllowedError') return source === 'call' ? 'Sharing was cancelled or blocked. Tap Start again and allow screen and audio sharing.' : 'Microphone access was blocked. Allow it for this site in your browser settings, then try again.';
   return `Could not start capture (${e.name}).`;
 }
@@ -542,9 +656,15 @@ function showLive(on){
 }
 
 async function startMeeting(existing){
+  stopPreview();
+  let fallback = false;
+  if (micMissing()) {
+    if (!confirm(`Your usual mic, ${micPref.label}, is not connected.\n\nRecord with ${defaultLabel || 'the system default mic'} instead?`)) return;
+    fallback = true;
+  }
   const ctx = newContext();
   let acq;
-  try { acq = await acquire(source); }
+  try { acq = await acquire(source, {fallback}); }
   catch (e) { try { ctx.close(); } catch {} showError(captureError(e)); return; }
   els.support.hidden = true;
   const free = await freeBytes();
@@ -583,7 +703,8 @@ async function beginPart(acq, ctx){
   const stream = acq.all;
   R.stream = stream;
   R.meeting.parts += 1; R.seq = 0;
-  (R.meeting.segments = R.meeting.segments || []).push({part: R.meeting.parts, startMs: elapsed(), at: Date.now(), source, reason: R.nextReason || ''});
+  (R.meeting.segments = R.meeting.segments || []).push({part: R.meeting.parts, startMs: elapsed(), at: Date.now(), source, mic: acq.micLabel || '', reason: R.nextReason || ''});
+  if (acq.micLabel) R.meeting.mic = acq.micLabel;
   R.nextReason = '';
   if (source === 'call') R.meeting.source = 'call';
   els.partNote.hidden = R.meeting.parts < 2;
@@ -647,7 +768,12 @@ async function onInterrupted(){
 async function resumeAfterInterrupt(){
   const ctx = newContext();
   let acq;
-  try { acq = await acquire(R.meeting.source || 'mic'); } catch (e) { try { ctx.close(); } catch {} showError(captureError(e) + ' Then tap Resume again.'); return; }
+  try { acq = await acquire(R.meeting.source || 'mic'); }
+  catch (e) {
+    // mid-meeting, keep recording on another mic rather than stopping
+    if (e.name === 'MicMissing') { try { acq = await acquire(R.meeting.source || 'mic', {fallback: true}); showError(`${micPref.label} was not found, so recording continued on ${acq.micLabel}.`); } catch (e2) { e = e2; } }
+    if (!acq) { try { ctx.close(); } catch {} showError(captureError(e) + ' Then tap Resume again.'); return; }
+  }
   els.alarm.hidden = true;
   R.interrupted = false; R.meeting.status = 'recording'; R.nextReason = 'after interruption';
   try { await beginPart(acq, ctx); } catch (e) { showError('Could not restart audio capture: ' + e.message); return; }
@@ -781,12 +907,14 @@ function listen(ctx, stream, onLevel){
 }
 async function runCheck(){
   if (R) return;
+  stopPreview();
   const ctx = newContext();
   const btn = els.checkBtn; btn.disabled = true;
   els.checks.hidden = true; els.checkAudio.hidden = true;
   let stream;
   try { stream = await getStream(); }
-  catch (e) { try { ctx.close(); } catch {} showError(e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings.' : `Could not open the microphone (${e.name}).`); btn.disabled = false; return; }
+  catch (e) { try { ctx.close(); } catch {} showError(e.name === 'MicMissing' ? e.message : e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site in your browser settings.' : `Could not open the microphone (${e.name}).`); btn.disabled = false; return; }
+  const checkedMic = micName(stream);
   btn.textContent = 'Listening for 5 s… speak normally';
   const levels = []; const pcms = []; let got = 0;
   let cap = null;
@@ -810,7 +938,8 @@ async function runCheck(){
   if (p90 > -42) results.push(['ok', 'Microphone level good', `Speech peaks around ${Math.round(p90)} dBFS.`]);
   else if (p90 > -55) results.push(['warn', 'Microphone level low', `Speech peaks around ${Math.round(p90)} dBFS. Move the phone toward the middle of the table, away from laptops and vents.`]);
   else if (max > -40) results.push(['warn', 'Heard only a brief sound', 'Run the check again and keep talking for the full 5 seconds.']);
-  else results.push(['bad', 'Almost nothing heard', 'Check that nothing covers the bottom of the phone and that no other app is using the microphone.']);
+  else results.push(['bad', 'Almost nothing heard', canCall ? 'Check the Microphone choice above is the mic you speak into, and that it is not muted.' : 'Check that nothing covers the bottom of the phone and that no other app is using the microphone.']);
+  if (checkedMic) results.push(['info', `Microphone: ${checkedMic}`, 'Change it under Microphone if this is not the one you use.']);
 
   const free = await freeBytes();
   if (free === null) results.push(['warn', 'Storage not reported', 'Check free space in your phone settings.']);
@@ -857,6 +986,7 @@ function notesText(m, partsCount){
   const out = [
     m.title, new Date(m.createdAt).toLocaleString(), `Duration: ${hms(m.durationMs)}`,
     m.source === 'call' ? 'Source: call audio + microphone' : m.source === 'import' ? `Source: imported file (${m.fileName || ''})` : 'Source: microphone (in the room)',
+    m.mic && m.source !== 'import' ? `Microphone: ${m.mic}` : null,
     m.boost ? `Processing: auto level on (rumble filter, adaptive gain${Number.isFinite(m.agcLo) ? ` ${m.agcLo.toFixed(0)} to ${m.agcHi.toFixed(0)} dB` : ''}, leveller)` : (m.format === 'pcm16' ? 'Processing: none' : null),
     !merged && partsCount > 1 ? `Audio parts: ${partsCount} (transcribe in order)` : null,
     '', 'Attendees:', m.attendees ? m.attendees.split('\n').filter(a => a.trim()).map(a => '- ' + a.trim()).join('\n') : '- (not recorded)'
@@ -1483,6 +1613,7 @@ async function boot(){
     navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).then(r => { try { r.update(); } catch {} return navigator.serviceWorker.ready; }).then(showOffline).catch(() => {});
     navigator.serviceWorker.addEventListener('controllerchange', showOffline);
   }
+  refreshMics();
   try { db = await openDB(); } catch { showError('Local storage is unavailable (private browsing?). Recordings cannot be saved.'); els.start.disabled = true; return; }
   // A meeting left mid-recording means the page was closed or crashed; keep what was saved.
   for (const m of await allMeetings()) if (m.status === 'recording' || m.status === 'paused') { m.status = 'recovered'; await saveMeeting(m); }
