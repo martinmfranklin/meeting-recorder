@@ -3,7 +3,7 @@
 A small helper that runs on your Windows laptop and lets Field Notes transcribe recordings with speaker labels. Audio never leaves the computer.
 
 - Speech to text: [faster-whisper](https://github.com/SYSTRAN/faster-whisper) with Whisper **large-v3-turbo** (uses an NVIDIA GPU automatically if present, otherwise the CPU)
-- Who spoke when: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) speaker diarization (pyannote segmentation 3.0 + NeMo TitaNet-Large speaker embeddings)
+- Who spoke when: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) speaker diarization (pyannote segmentation 3.0 + NeMo TitaNet speaker embeddings)
 - Reads any audio or video: Field Notes WAV, phone voice memos, Teams/Zoom/Meet MP4, MP3, M4A
 
 ## Install, update, or set up another computer
@@ -12,7 +12,7 @@ The same installer does all three. No admin rights needed.
 
 1. Download **[Install Field Notes Transcriber.cmd](https://martinmfranklin.github.io/meeting-recorder/transcriber/Install-Field-Notes-Transcriber.cmd)** (Field Notes on a computer also shows a *Download installer* link when the transcriber is missing or out of date).
 2. Double-click it. If Windows SmartScreen warns, choose **More info → Run anyway** (Chrome may also ask you to **Keep** the file).
-3. Leave the window open until it says **INSTALL FINISHED**. First time on a computer: 10 to 20 minutes (about 1.8 GB of models). Updates: a minute or two. A log is written to `Downloads\FieldNotes-install-log.txt`.
+3. Leave the window open until it says **INSTALL FINISHED**. First time on a computer: 10 to 20 minutes (about 1.7 GB of models). Updates: a minute or two. A log is written to `Downloads\FieldNotes-install-log.txt`.
 
 Or, in **PowerShell**:
 
@@ -20,7 +20,7 @@ Or, in **PowerShell**:
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/martinmfranklin/meeting-recorder/main/transcriber/install.ps1 | iex"
 ```
 
-It installs Python 3.12 for your user if needed, sets up its own environment in `%LOCALAPPDATA%\FieldNotesTranscriber`, downloads the models (about 1.8 GB, once), starts the helper now and at every sign-in (hidden), and adds **Send to > Transcribe (Field Notes)** to the right-click menu.
+It installs Python 3.12 for your user if needed, sets up its own environment in `%LOCALAPPDATA%\FieldNotesTranscriber`, downloads the models (about 1.7 GB, once), starts the helper now and at every sign-in (hidden), and adds **Send to > Transcribe (Field Notes)** to the right-click menu.
 
 Check it is running: open <http://127.0.0.1:8787> in a browser. The page lists recent jobs; **Remove** or **Clear finished and failed** tidies that list (saved transcripts are kept).
 
@@ -28,8 +28,8 @@ Check it is running: open <http://127.0.0.1:8787> in a browser. The page lists r
 
 1. Open Field Notes in **Chrome or Edge** on the same computer.
 2. For a phone recording or a Teams/Zoom file: **Import file** (next to Saved recordings). Select the audio or video, plus its `_notes.txt` from Field Notes if you have it; title, attendees and notes come back with it.
-3. Open the recording's **Details** and click **Transcribe**. On auto it finds at least as many speakers as there are attendees listed. If more people spoke, enter how many (including you). Any number is treated as a minimum: it leans towards splitting one person in two rather than merging two people.
-4. When it finishes, name each speaker (Play a sample to hear who it is). One person shown as two: give both the same name. Two people shown as one: raise **Speakers** under the transcript and click **Re-identify speakers**. That reuses the words already transcribed, redoes only who said what, and keeps the names you gave.
+3. Open the recording's **Details** and click **Transcribe**. Enter how many people spoke if you know it (best results); on auto it estimates the number.
+4. When it finishes, name each speaker (Play a sample to hear who it is). If the number of people is wrong, enter the right number under the transcript and click **Re-identify speakers**: it takes seconds, keeps the text, and keeps the names you gave. Giving two speakers the same name also merges them.
 5. **Copy transcript**, or **Share / Save file**: the `_transcript.txt` is included, with your notes placed at the time you wrote them.
 
 The first time, Chrome may ask whether Field Notes can access apps on this device. Choose **Allow**; that is how the page reaches the helper.
@@ -69,7 +69,7 @@ Roughly, for one hour of audio: a few minutes with an NVIDIA GPU, 20 to 40 minut
 - The helper listens only on `127.0.0.1` (this computer), not the network.
 - It only accepts requests from the Field Notes page (and `localhost` for testing); other websites are refused.
 - Uploaded audio is deleted after transcription. Finished transcripts are kept for 7 days in `%LOCALAPPDATA%\FieldNotesTranscriber\jobs` so Field Notes can collect them, and removed once collected.
-- The recognised words and their timings (no audio) are kept for 14 days in `%LOCALAPPDATA%\FieldNotesTranscriber\cache` so **Re-identify speakers** does not have to transcribe again. Delete that folder at any time.
+- The recognised words, speech turn times and voice fingerprints (no audio) are kept for 14 days in `%LOCALAPPDATA%\FieldNotesTranscriber\cache` so **Re-identify speakers** does not have to transcribe again. Delete that folder at any time.
 
 ## Options
 

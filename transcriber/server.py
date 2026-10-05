@@ -6,8 +6,8 @@ transcribes it with speaker labels and returns the result. Audio never leaves th
   GET    /health          status, model, CPU/GPU
   POST   /jobs            body = audio/video file; headers X-FN-Title, X-FN-Attendees (URI-encoded JSON list),
                           X-FN-Speakers (optional int), X-FN-Filename,
-                          X-FN-Reuse (1 = keep this recording's earlier words, redo only the speakers),
-                          X-FN-MinSpeakers (on auto, find at least this many; Field Notes sends the attendee count)
+                          X-FN-Reuse (1 = reuse this recording's cached words and speaker analysis; only regroup speakers),
+                          X-FN-MinSpeakers (sent by Field Notes 2.6.0; ignored)
   GET    /jobs/<id>       progress, then the transcript
   DELETE /jobs/<id>       cancel or remove
   POST   /local/jobs      {"path": ..., "srt": bool} from programs on this computer (needs X-FN-Token, no browser Origin)
@@ -40,7 +40,7 @@ import html as html_mod
 import mimetypes
 import os
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 DEFAULT_ORIGINS = [r"https://martinmfranklin\.github\.io", r"http://localhost(:\d+)?", r"http://127\.0\.0\.1(:\d+)?"]
 
 
