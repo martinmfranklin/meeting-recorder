@@ -8,7 +8,7 @@
 #   1. Installs Python 3.12 for your user (via winget) if no suitable Python is found
 #   2. Creates %LOCALAPPDATA%\FieldNotesTranscriber with its own Python environment
 #   3. Installs faster-whisper and sherpa-onnx (plus NVIDIA GPU libraries if an NVIDIA card is present)
-#   4. Downloads the speech and speaker models (about 1.7 GB, once)
+#   4. Downloads the speech and speaker models (about 1.8 GB, once)
 #   5. Starts the transcriber now and at every sign-in (hidden; the model loads only when there is work)
 #   6. Adds right-click > Send to > Transcribe (Field Notes) for any audio or video file
 
@@ -84,7 +84,7 @@ foreach ($f in 'engine.py', 'server.py', 'inbox.py', 'formats.py', 'transcribe.p
     Invoke-WebRequest -UseBasicParsing -Uri "$Base/$f" -OutFile (Join-Path $Root $f)
 }
 
-Step 'Downloading models (about 1.7 GB the first time; this can take a while)'
+Step 'Downloading models (about 1.8 GB the first time; this can take a while)'
 Push-Location $Root
 & $Py server.py --prefetch
 $ok = ($LASTEXITCODE -eq 0)

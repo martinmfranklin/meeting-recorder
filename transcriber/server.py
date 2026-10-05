@@ -5,7 +5,9 @@ transcribes it with speaker labels and returns the result. Audio never leaves th
 
   GET    /health          status, model, CPU/GPU
   POST   /jobs            body = audio/video file; headers X-FN-Title, X-FN-Attendees (URI-encoded JSON list),
-                          X-FN-Speakers (optional int), X-FN-Filename
+                          X-FN-Speakers (optional int), X-FN-Filename,
+                          X-FN-Reuse (1 = keep this recording's earlier words, redo only the speakers),
+                          X-FN-MinSpeakers (on auto, find at least this many; Field Notes sends the attendee count)
   GET    /jobs/<id>       progress, then the transcript
   DELETE /jobs/<id>       cancel or remove
   POST   /local/jobs      {"path": ..., "srt": bool} from programs on this computer (needs X-FN-Token, no browser Origin)
@@ -38,7 +40,7 @@ import html as html_mod
 import mimetypes
 import os
 
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 DEFAULT_ORIGINS = [r"https://martinmfranklin\.github\.io", r"http://localhost(:\d+)?", r"http://127\.0\.0\.1(:\d+)?"]
 
 
@@ -68,10 +70,12 @@ class State:
             tok.write_text(secrets.token_hex(16), encoding="utf-8")
         self.token = tok.read_text(encoding="utf-8").strip()
 
-    def submit_path(self, path, title, attendees, keep_file=False, num_speakers=0, filename=None, outputs=None):
+    def submit_path(self, path, title, attendees, keep_file=False, num_speakers=0, filename=None, outputs=None, reuse=False,
+                    min_speakers=None):
         jid = uuid.uuid4().hex[:12]
         job = {"id": jid, "status": "queued", "stage": "Queued", "progress": 0.0, "created": time.time(),
-               "title": title or "", "attendees": attendees or [], "num_speakers": num_speakers,
+               "title": title or "", "attendees": attendees or [], "num_speakers": num_speakers, "reuse": bool(reuse),
+               "min_speakers": min(20, len(attendees or [])) if min_speakers is None else min_speakers,
                "filename": filename or Path(path).name, "bytes": Path(path).stat().st_size, "_path": str(path), "_keep": keep_file}
         if outputs:
             job["_outputs"] = outputs
@@ -192,7 +196,8 @@ class State:
             job.update(status="running", started=time.time())
             result = None
             try:
-                self.conn.send(("job", jid, job["_path"], job.get("title", ""), job.get("attendees") or [], job.get("num_speakers") or 0))
+                self.conn.send(("job", jid, job["_path"], job.get("title", ""), job.get("attendees") or [], job.get("num_speakers") or 0,
+                                bool(job.get("reuse")), int(job.get("min_speakers") or 0)))
                 while True:
                     if job.get("_cancel") and not job.get("_cancel_sent"):
                         self.conn.send(("cancel", jid))
@@ -281,7 +286,7 @@ def _engine_loop(conn, model, device, test_asr):
             return
         if msg[0] != "job":
             continue
-        _, jid, path, title, att, ns = msg
+        _, jid, path, title, att, ns, reuse, mins = msg
         state = {"cancel": False}
 
         def progress(stage, frac):
@@ -294,7 +299,7 @@ def _engine_loop(conn, model, device, test_asr):
             conn.send(("progress", jid, stage, float(frac)))
 
         try:
-            res = engine.run_job(engine.Job(path=path, title=title, attendees=att, num_speakers=ns), asr, dia, progress)
+            res = engine.run_job(engine.Job(path=path, title=title, attendees=att, num_speakers=ns, reuse=reuse, min_speakers=mins), asr, dia, progress)
             conn.send(("done", jid, res))
         except _ChildCancel:
             conn.send(("cancelled", jid))
@@ -321,7 +326,7 @@ def make_handler(st: State):
                 self.send_header("Access-Control-Allow-Origin", o)
                 self.send_header("Vary", "Origin")
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-FN-Title, X-FN-Attendees, X-FN-Speakers, X-FN-Filename, X-FN-Client")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, X-FN-Title, X-FN-Attendees, X-FN-Speakers, X-FN-Filename, X-FN-Client, X-FN-Reuse, X-FN-MinSpeakers")
                 self.send_header("Access-Control-Allow-Private-Network", "true")
                 self.send_header("Access-Control-Max-Age", "600")
 
@@ -444,7 +449,7 @@ def make_handler(st: State):
                 meta = formats.meta_for(src)
                 att = [a for a in (meta or {}).get("attendees", "").splitlines() if a.strip()]
                 jid = st.submit_path(str(src), (meta or {}).get("title") or src.stem, att, keep_file=True,
-                                     num_speakers=int(req.get("speakers") or 0),
+                                     num_speakers=int(req.get("speakers") or 0), reuse=bool(req.get("reuse")),
                                      outputs={"dir": req.get("out_dir") or str(src.parent), "srt": bool(req.get("srt")), "meta": meta})
                 return self._json(202, {"id": jid, "status": "queued"})
             if path != "/jobs":
@@ -476,10 +481,15 @@ def make_handler(st: State):
                 ns = int(self.headers.get("X-FN-Speakers") or 0)
             except ValueError:
                 ns = 0
+            try:
+                mins = int(self.headers.get("X-FN-MinSpeakers") or 0)
+            except ValueError:
+                mins = 0
             jid = uuid.uuid4().hex[:12]
             job = {"id": jid, "status": "queued", "stage": "Queued", "progress": 0.0, "created": time.time(),
                    "title": dec("X-FN-Title"), "attendees": attendees if isinstance(attendees, list) else [],
-                   "num_speakers": max(0, min(ns, 20)), "filename": name, "bytes": n, "_path": tmp.name}
+                   "num_speakers": max(0, min(ns, 20)), "reuse": self.headers.get("X-FN-Reuse") == "1",
+                   "min_speakers": max(0, min(mins, 20)), "filename": name, "bytes": n, "_path": tmp.name}
             st.jobs[jid] = job
             st.queue.put(jid)
             self._json(202, {"id": jid, "status": "queued"})

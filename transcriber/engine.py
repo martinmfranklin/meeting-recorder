@@ -10,8 +10,12 @@ Transcribes an audio or video file and labels who spoke when, entirely on this c
 """
 from __future__ import annotations
 
+import gzip
+import hashlib
+import json
 import math
 import os
+import time
 import sys
 import tarfile
 import urllib.request
@@ -24,7 +28,16 @@ import numpy as np
 SR = 16000
 GH = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 SEG_URL = f"{GH}/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
-EMB_URL = f"{GH}/speaker-recongition-models/nemo_en_titanet_small.onnx"
+EMB_NAME = "nemo_en_titanet_large.onnx"
+EMB_URL = f"{GH}/speaker-recongition-models/{EMB_NAME}"
+# Clustering thresholds: lower = more speakers. Auto uses the first; to find "at least N" speakers the next
+# ones are tried in turn until N are found. Tested on AMI meeting excerpts, clean and through a simulated
+# Teams-through-laptop-speakers path: the old single threshold (0.7) merged about 60% of people with someone
+# else; 0.6 plus stepping down to the attendee count cut that to under 40%. Asking sherpa-onnx for an exact
+# cluster count merged more (about 80%), so a count is always treated as a minimum. The tuning leans towards
+# splitting one person in two, which Field Notes fixes by giving both the same name.
+THRESHOLDS = (0.6, 0.5, 0.4, 0.3)
+AUTO_THRESHOLD = THRESHOLDS[0]
 
 Progress = Callable[[str, float], None]  # (stage, fraction 0..1)
 
@@ -64,7 +77,7 @@ def ensure_diarization_models(log=print) -> tuple[Path, Path]:
         with tarfile.open(arc) as t:
             t.extractall(md)
         arc.unlink(missing_ok=True)
-    emb = md / "nemo_en_titanet_small.onnx"
+    emb = md / EMB_NAME
     if not emb.exists():
         _download(EMB_URL, emb, log)
     return seg, emb
@@ -216,30 +229,31 @@ class SherpaWhisperTestASR:
 # ---------------------------------------------------------------- speaker identification
 
 class Diarizer:
-    def __init__(self, threshold: float = 0.7, log=print):
+    def __init__(self, threshold: float = AUTO_THRESHOLD, log=print):
         import sherpa_onnx
         seg, emb = ensure_diarization_models(log)
         threads = max(1, (os.cpu_count() or 4) - 1)
-        self._cfg = lambda n: sherpa_onnx.OfflineSpeakerDiarizationConfig(
+        self._cfg = lambda thr: sherpa_onnx.OfflineSpeakerDiarizationConfig(
             segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
                 pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(seg)),
                 num_threads=threads),
             embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(emb), num_threads=threads),
-            clustering=sherpa_onnx.FastClusteringConfig(num_clusters=n if n else -1, threshold=threshold),
+            clustering=sherpa_onnx.FastClusteringConfig(num_clusters=-1, threshold=thr),
             min_duration_on=0.3,
             min_duration_off=0.5,
         )
         self._sherpa = sherpa_onnx
+        self.threshold = threshold
+        self.info = {"embedding": EMB_NAME.removesuffix(".onnx"), "threshold": threshold}
 
-    def run(self, audio: np.ndarray, num_speakers: int = 0, progress: Optional[Progress] = None) -> list[dict]:
-        sd = self._sherpa.OfflineSpeakerDiarization(self._cfg(num_speakers))
-
+    def _once(self, audio, thr, progress, label):
+        sd = self._sherpa.OfflineSpeakerDiarization(self._cfg(thr))
         err = []
 
         def cb(done: int, total: int) -> int:
             if progress and total and not err:
                 try:
-                    progress("Identifying speakers", done / total)
+                    progress(label, done / total)
                 except BaseException as ex:  # do not raise through native code
                     err.append(ex)
             return 0
@@ -248,6 +262,17 @@ class Diarizer:
         if err:
             raise err[0]
         return [{"start": r.start, "end": r.end, "speaker": int(r.speaker)} for r in result]
+
+    def steps(self, at_least: int = 0) -> list[float]:
+        """Thresholds to try: the auto one, then lower ones while fewer than at_least speakers are found."""
+        steps = [t for t in THRESHOLDS if t <= self.threshold] or [self.threshold]
+        return steps if at_least > 1 else steps[:1]
+
+    def run(self, audio: np.ndarray, threshold: Optional[float] = None, progress: Optional[Progress] = None,
+            label: str = "Identifying speakers") -> list[dict]:
+        thr = self.threshold if threshold is None else threshold
+        self.info["threshold"] = thr
+        return self._once(audio, thr, progress, label)
 
 
 # ---------------------------------------------------------------- merge
@@ -323,8 +348,59 @@ class Job:
     path: str
     title: str = ""
     attendees: list = None
-    num_speakers: int = 0
+    num_speakers: int = 0    # how many people spoke, if known (treated as "at least")
     language: Optional[str] = None
+    reuse: bool = False      # reuse this recording's earlier transcript text; only redo speakers
+    min_speakers: int = 0    # on auto, find at least this many (the attendee count)
+
+
+# ---------------------------------------------------------------- transcript cache
+# Word timings from a finished transcription are kept for CACHE_DAYS, keyed by the decoded audio, so
+# "Re-identify speakers" redoes only the speaker step (about a quarter of the time) instead of everything.
+
+CACHE_DAYS = 14
+
+
+def cache_dir() -> Path:
+    d = app_dir() / "cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def audio_key(audio: np.ndarray, model: str) -> str:
+    h = hashlib.sha256(audio.tobytes()).hexdigest()[:32]
+    return f"{h}-{model or 'asr'}".replace("/", "_")
+
+
+def cache_get(key: str):
+    f = cache_dir() / f"{key}.json.gz"
+    if not f.exists():
+        return None
+    try:
+        with gzip.open(f, "rt", encoding="utf-8") as fh:
+            d = json.load(fh)
+        os.utime(f)  # keep recently used entries longer
+        return d["segments"], d["language"]
+    except Exception:
+        return None
+
+
+def cache_put(key: str, segments: list, language: str) -> None:
+    d = cache_dir()
+    try:
+        tmp = d / f"{key}.part"
+        with gzip.open(tmp, "wt", encoding="utf-8") as fh:
+            json.dump({"segments": segments, "language": language}, fh)
+        tmp.replace(d / f"{key}.json.gz")
+    except Exception:
+        pass
+    cutoff = time.time() - CACHE_DAYS * 86400
+    for f in d.glob("*.json.gz"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+        except OSError:
+            pass
 
 
 def build_prompt(title: str, attendees: list) -> str:
@@ -341,12 +417,29 @@ def run_job(job: Job, asr, diarizer: Diarizer, progress: Progress) -> dict:
     progress("Reading audio", 0.0)
     audio = load_audio(job.path)
     duration = len(audio) / SR
+    key = audio_key(audio, getattr(asr, "model_name", ""))
+    cached = cache_get(key) if job.reuse else None
     # weight the stages so one progress bar moves smoothly: speakers ~25%, words ~75%
+    # (when the words are reused, the speaker step is the whole job)
+    w = 1.0 if cached else 0.25
     progress("Identifying speakers", 0.0)
-    turns = diarizer.run(audio, job.num_speakers, lambda st, f: progress(st, 0.25 * f))
-    segs, lang = asr.transcribe(audio, build_prompt(job.title, job.attendees), job.language,
-                                lambda st, f: progress(st, 0.25 + 0.75 * f))
+    # a typed speaker count, or else the attendee count, is a minimum: fewer found means people were merged
+    at_least = min(20, job.num_speakers or job.min_speakers or 0)
+    steps = diarizer.steps(at_least)
+    turns = diarizer.run(audio, steps[0], lambda st, f: progress(st, w * f))
+    if cached:
+        segs, lang = cached
+    else:
+        segs, lang = asr.transcribe(audio, build_prompt(job.title, job.attendees), job.language,
+                                    lambda st, f: progress(st, 0.25 + 0.75 * f))
+        cache_put(key, segs, lang)
     utts = merge(segs, turns)
+    for thr in steps[1:]:
+        # count people who actually have words, since that is what the transcript shows
+        if len({u["speaker"] for u in utts}) >= at_least:
+            break
+        turns = diarizer.run(audio, thr, lambda st, f: progress(st, 0.9 + 0.1 * f), f"Looking for {at_least} speakers")
+        utts = merge(segs, turns)
     speakers = speaker_summary(utts)
     progress("Done", 1.0)
     return {
@@ -355,6 +448,7 @@ def run_job(job: Job, asr, diarizer: Diarizer, progress: Progress) -> dict:
         "language": lang,
         "model": getattr(asr, "model_name", ""),
         "device": getattr(asr, "device", ""),
+        "diarization": dict(getattr(diarizer, "info", {}), at_least=at_least or "auto", reused_words=bool(cached)),
         "speakers": speakers,
         "utterances": utts,
     }

@@ -317,7 +317,7 @@ els.today.textContent = new Date().toLocaleDateString(undefined, {weekday:'short
 
 const TYPES = {action: 'Action', decision: 'Decision', question: 'Question', followup: 'Follow-up', note: 'Note'};
 const BYTES_PER_HOUR = 115.2e6; // 16 kHz x 16-bit mono WAV
-const VERSION = 'v2.5.0';
+const VERSION = 'v2.6.0';
 
 /* ---------- storage (IndexedDB) ---------- */
 let db;
@@ -1059,7 +1059,7 @@ function save(files, btn){
 
 /* ---------- transcription via the Field Notes Transcriber helper on this computer ---------- */
 const HELPER = 'http://127.0.0.1:8787';
-const HELPER_LATEST = '1.4.1'; // bump when transcriber/ changes; older helpers show an update notice
+const HELPER_LATEST = '1.5.0'; // bump when transcriber/ changes; older helpers show an update notice
 const verLt = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
 const isDesktop = matchMedia('(pointer:fine)').matches;
 const MEET = new Map();          // id -> meeting object currently shown in the list
@@ -1080,22 +1080,44 @@ async function checkHelper(force){
 function attendeeLines(m){ return (m.attendees || '').split('\n').map(s => s.trim()).filter(Boolean); }
 function attendeeNames(m){ return attendeeLines(m).map(s => s.split(',')[0].trim()).filter(Boolean); }
 function mediaFile(files){ return files.find(f => !f.name.endsWith('.txt')); }
+/* Speakers to ask for: the number typed in Details, otherwise auto (0). On auto the transcriber finds at
+   least as many speakers as there are attendees, so two attendees are not merged into one. */
+function speakerCount(m){ const n = parseInt(m.txSpeakers, 10); return Number.isFinite(n) && n > 0 ? n : 0; }
+/* After re-identifying, keep the names already given: each old name goes to the one new speaker that
+   shares the most talk time with it (only one, so a speaker who was split stays visibly split). */
+function carryNames(oldT, newT, oldNames){
+  const ov = {};
+  for (const nu of newT.utterances) for (const ou of oldT.utterances) {
+    const t = Math.min(ou.end, nu.end) - Math.max(ou.start, nu.start);
+    if (t > 0) { const key = ou.speaker + '|' + nu.speaker; ov[key] = (ov[key] || 0) + t; }
+  }
+  const pairs = Object.entries(ov).map(([k, t]) => [...k.split('|'), t]).sort((a, b) => b[2] - a[2]);
+  const usedOld = new Set(), usedNew = new Set(), out = {};
+  for (const [o, n] of pairs) {
+    if (usedOld.has(o) || usedNew.has(n)) continue;
+    usedOld.add(o); usedNew.add(n);
+    const name = (oldNames[o] || '').trim();
+    if (name && !Object.values(out).includes(name)) out[n] = name;
+  }
+  return out;
+}
 function speakerName(m, id){ return ((m.speakerNames || {})[id] || '').trim() || `Speaker ${String(id).replace(/^S/, '')}`; }
 
-async function startTranscription(m){
+async function startTranscription(m, opt = {}){
   const h = await checkHelper(true);
   if (!h.ok) { m.tx = {status: 'error', error: 'The transcriber is not running on this computer.'}; return refreshTx(m); }
   m.tx = {status: 'uploading', stage: 'Sending to transcriber', progress: 0}; refreshTx(m);
   try {
     const f = mediaFile(await buildFiles(m));
-    const n = parseInt(m.txSpeakers, 10);
+    const n = opt.speakers != null ? opt.speakers : speakerCount(m);
+    const reid = !!opt.reidentify && !!m.transcript;
     const r = await fetch(HELPER + '/jobs', {method: 'POST', body: f, headers: {
       'Content-Type': f.type || 'application/octet-stream', 'X-FN-Client': 'field-notes',
       'X-FN-Title': encodeURIComponent(m.title || ''), 'X-FN-Attendees': encodeURIComponent(JSON.stringify(attendeeLines(m))),
-      'X-FN-Speakers': String(Number.isFinite(n) && n > 0 ? n : 0), 'X-FN-Filename': encodeURIComponent(f.name)}});
+      'X-FN-Speakers': String(n > 0 ? n : 0), 'X-FN-MinSpeakers': String(Math.min(20, attendeeLines(m).length)), 'X-FN-Filename': encodeURIComponent(f.name), 'X-FN-Reuse': reid ? '1' : '0'}});
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.status);
-    m.tx = {status: 'queued', jobId: j.id, stage: 'Queued', progress: 0, at: Date.now()};
+    m.tx = {status: 'queued', jobId: j.id, stage: 'Queued', progress: 0, at: Date.now(), reid};
     await saveMeeting(m); refreshTx(m); pollJob(m.id);
   } catch (e) { m.tx = {status: 'error', error: 'Could not send the recording: ' + (e.message || e)}; await saveMeeting(m); refreshTx(m); }
 }
@@ -1117,10 +1139,13 @@ async function pollJob(id){
       try { const r = await fetch(`${HELPER}/jobs/${m.tx.jobId}`, {cache: 'no-store'}); j = await r.json(); if (r.status === 404) j = {status: 'error', error: 'The transcriber no longer has this job. Please transcribe again.'}; misses = 0; }
       catch { if (++misses > 5) { m.tx.stage = 'Waiting for the transcriber (is it running?)'; refreshTx(m); await new Promise(r => setTimeout(r, 10000)); } else await new Promise(r => setTimeout(r, 2000)); continue; }
       if (j.status === 'done') {
+        const reid = m.tx.reid && m.transcript;
+        if (reid) m.speakerNames = carryNames(m.transcript, j.result, m.speakerNames || {});
         m.transcript = j.result; m.speakerNames = m.speakerNames || {};
         if (!m.durationMs && j.result && j.result.duration) { m.durationMs = j.result.duration * 1000; }
         m.tx = {status: 'done', jobId: m.tx.jobId, at: Date.now()};
         await saveMeeting(m); const lv = syncLive(m); refreshTx(lv); updateCardBadge(lv);
+        if (reid) pushOneDriveCopy(lv);
         fetch(`${HELPER}/jobs/${j.id}`, {method: 'DELETE'}).catch(() => {});
         break;
       }
@@ -1215,6 +1240,7 @@ async function renderTx(m, box){
     return;
   }
 
+  if (m.transcript && (t.status === 'error' || t.status === 'cancelled')) msg(t.status === 'cancelled' ? 'Cancelled; this is the earlier transcript.' : `${t.error || 'That did not work'}; this is the earlier transcript.`).classList.add('warn-text');
   if (m.transcript && !m.transcript.utterances.length) { msg('No speech was found in this recording.'); }
   if (m.transcript && m.transcript.utterances.length) {
     const T = m.transcript;
@@ -1254,7 +1280,24 @@ async function renderTx(m, box){
     const again = document.createElement('button'); again.className = 'linkbtn'; again.textContent = 'Transcribe again';
     again.onclick = async () => { const h = await checkHelper(true); if (h.ok) startTranscription(m); else { again.textContent = 'Transcriber not running'; } };
     const meta = msg(`Whisper ${T.model} on ${T.device} · ${T.speakers.length} speaker${T.speakers.length === 1 ? '' : 's'} · included when you Share or Save`);
-    box.append(intro, dl, sp, lines, acts, meta, again);
+    // re-identify: keep the words, redo only who said what
+    const reid = document.createElement('div'); reid.className = 'tx-start';
+    const rlab = document.createElement('label'); rlab.className = 'inline'; rlab.textContent = 'Speakers';
+    const rn = document.createElement('input'); rn.type = 'number'; rn.min = '1'; rn.max = '20'; rn.id = 'reid-' + m.id;
+    rn.value = String(Math.min(20, T.speakers.length + 1)); rlab.append(rn);
+    const rb = mkBtn('Re-identify speakers');
+    rb.onclick = async () => {
+      const k = parseInt(rn.value, 10);
+      if (!(k > 0)) { rn.focus(); return; }
+      const h = await checkHelper(true);
+      if (!h.ok) { rb.textContent = 'Transcriber not running'; return; }
+      if (verLt(h.info.version, '1.5.0')) { rb.textContent = 'Update the transcriber first'; return; }
+      m.txSpeakers = String(k); await saveMeeting(m);
+      startTranscription(m, {reidentify: true, speakers: k});
+    };
+    reid.append(rlab, rb);
+    const rhint = msg('Two people shown as one? Raise the number and re-identify. It keeps the text and the names you gave, and skips the speech-to-text step. One person shown as two? Just give both the same name.');
+    box.append(intro, dl, sp, lines, acts, meta, reid, rhint, again);
     return;
   }
 
@@ -1274,14 +1317,15 @@ async function renderTx(m, box){
   const row = document.createElement('div'); row.className = 'tx-start';
   const go = mkBtn('Transcribe', 'primary');
   const nlab = document.createElement('label'); nlab.className = 'inline'; nlab.textContent = 'Speakers';
-  const n = document.createElement('input'); n.type = 'number'; n.min = '0'; n.max = '20'; n.id = 'nspk-' + m.id; n.placeholder = 'auto';
+  const n = document.createElement('input'); n.type = 'number'; n.min = '0'; n.max = '20'; n.id = 'nspk-' + m.id;
+  n.placeholder = 'auto'; const nAtt = attendeeLines(m).length;
   n.value = m.txSpeakers || ''; n.addEventListener('change', () => { m.txSpeakers = n.value; saveMeeting(m); });
   nlab.append(n);
   go.onclick = () => startTranscription(m);
   row.append(go, nlab); box.append(row);
   msg(info.status === 'error'
     ? `Transcriber problem: ${info.detail}. You can still try; it retries loading the model.`
-    : `Runs on this computer (Whisper ${info.model}${info.device ? ', ' + info.device : ''}). ${info.status === 'ready' ? '' : 'The model loads when you start (about 20 seconds). '}Leave Speakers on auto, or enter how many people spoke if you know.`);
+    : `Runs on this computer (Whisper ${info.model}${info.device ? ', ' + info.device : ''}). ${info.status === 'ready' ? '' : 'The model loads when you start (about 20 seconds). '}${nAtt > 1 ? `On auto it finds at least ${nAtt} speakers (your attendees). ` : 'Leave Speakers on auto, or '}${nAtt > 1 ? 'If more people spoke, enter how many, including you.' : 'enter how many people spoke, including you, if you know.'}`);
 }
 
 /* ---------- import a recording made elsewhere (phone, Teams, Zoom, any audio or video) ---------- */

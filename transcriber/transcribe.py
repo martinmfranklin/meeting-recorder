@@ -86,7 +86,7 @@ def in_process(src: Path, srt: bool, speakers: int, model: str) -> list[str]:
     meta = formats.meta_for(src)
     att = [a for a in (meta or {}).get("attendees", "").splitlines() if a.strip()]
     res = engine.run_job(engine.Job(path=str(src), title=(meta or {}).get("title") or src.stem, attendees=att,
-                                    num_speakers=speakers),
+                                    num_speakers=speakers, min_speakers=min(20, len(att))),
                          _local["asr"], _local["dia"], lambda s, f: bar(s, f, src.name))
     print()
     return formats.write_outputs(res, src, src.parent, meta, srt)
